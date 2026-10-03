@@ -1,0 +1,6 @@
+# These are Clippy configuration keys, not lint levels; Cargo manifest lint
+# tables accept only a lint level string or `{ level, priority }` table.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

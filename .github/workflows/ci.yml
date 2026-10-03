@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run unit and process suites
+        run: cargo test --locked --all-targets
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Build release binary
+        run: cargo build --locked --release
+      - name: Validate packaged source
+        run: cargo package --locked --no-verify
+      - name: Install packaged CLI
+        run: cargo install --path . --locked --root target/ci-install --force
+      - name: Smoke real macOS toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          distill="$GITHUB_WORKSPACE/target/ci-install/bin/distill"
+          "$distill" --version
+          xcodebuild -version
+          swift --version
+          "$distill" --cwd "$GITHUB_WORKSPACE/tests/fixtures/real-swift-package" swift build -- --configuration release --build-path "$GITHUB_WORKSPACE/target/ci-swift-build"
+          "$distill" --cwd "$GITHUB_WORKSPACE" cargo build -- --locked
+          "$distill" --cwd "$GITHUB_WORKSPACE" cargo clippy -- --all-targets
