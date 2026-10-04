@@ -3,10 +3,10 @@ default: check
 check: fmt test clippy
 
 @fmt:
-    cargo fmt --all -- --check
+    if command -v distill >/dev/null 2>&1 && distill --plan cargo fmt -- --all --check >/dev/null 2>&1; then distill cargo fmt -- --all --check; else cargo fmt --all -- --check; fi
 
 @test:
-    cargo test --locked --all-targets
+    if command -v distill >/dev/null 2>&1 && distill --plan cargo test -- --locked --all-targets >/dev/null 2>&1; then distill cargo test -- --locked --all-targets; else cargo test --locked --all-targets; fi
 
 @clippy:
     if command -v distill >/dev/null 2>&1; then distill cargo clippy -- --locked --all-targets -- -D warnings; else cargo clippy --locked --all-targets -- -D warnings; fi
@@ -15,4 +15,4 @@ check: fmt test clippy
     if command -v distill >/dev/null 2>&1; then distill cargo build -- --locked; else cargo build --locked; fi
 
 @package:
-    cargo package --locked --allow-dirty
+    if command -v distill >/dev/null 2>&1 && distill --plan cargo package -- --locked --allow-dirty >/dev/null 2>&1; then distill cargo package -- --locked --allow-dirty; else cargo package --locked --allow-dirty; fi
