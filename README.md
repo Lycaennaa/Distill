@@ -37,23 +37,23 @@ distill cargo build|test|fmt|package|clippy
 Examples:
 
 ```sh
-distill --plan swift build -- --configuration release
-distill --timeout 5m cargo clippy -- --all-targets --all-features
-distill cargo fmt -- --check
-distill cargo test -- --all-targets
-distill cargo test -- --locked --offline --all-targets
-distill cargo package -- --locked --allow-dirty
-distill cargo test --nightly -- --all-targets
-distill --save-log ./build.log xcode build -- --scheme Demo
+distill --plan swift build --configuration release
+distill --timeout 5m cargo clippy --all-targets --all-features
+distill cargo fmt --check
+distill cargo test --all-targets
+distill cargo test --locked --offline --all-targets
+distill cargo package --locked --allow-dirty
+distill cargo test --nightly --all-targets
+distill --save-log ./build.log xcode build --scheme Demo
 distill --open --stream xcode build
-distill swift lint -- --config .swiftlint.yml
+distill swift lint --config .swiftlint.yml
 ```
 
-Put wrapper options before `--`; arguments after it go to the selected tool. Distill launches tools directly, without a shell.
+Pass wrapped-tool arguments directly after the action. Use `--` when an argument conflicts with a Distill option and must be forwarded instead. Distill launches tools directly, without a shell.
 
 Discovery searches the current directory (`--cwd`) and its ancestors for an Xcode project/workspace, Swift package, or Cargo manifest. Missing or ambiguous roots fail. SwiftLint needs no package. Explicit `-workspace`, `-project`, `--package-path`, and `--manifest-path` values are validated and disable automatic discovery.
 
-Cargo build/test/Clippy add `--quiet` unless verbosity is requested and `--message-format=json-diagnostic-rendered-ansi` unless another message format is supplied. Cargo package adds only `--quiet` unless verbosity is requested; Cargo fmt adds no flags. Pass Distill's `--nightly` flag before `--` to set `RUSTUP_TOOLCHAIN=nightly-aarch64-apple-darwin` for any Cargo action. Options supported by each Cargo subcommand are forwarded after Distill's `--`. Distill parses compiler, lint, XCTest, and Cargo output into deterministic records. Cargo test summaries include pass/fail/skipped counts; recognized test failures include failed cases. `xcode list` reports projects/workspaces, targets, configurations, and schemes. Test summaries omit successful case details.
+Cargo build/test/Clippy add `--quiet` unless verbosity is requested and `--message-format=json-diagnostic-rendered-ansi` unless another message format is supplied. Cargo package adds only `--quiet` unless verbosity is requested; Cargo fmt adds no flags. Pass Distill's `--nightly` flag to set `RUSTUP_TOOLCHAIN=nightly-aarch64-apple-darwin` for any Cargo action. Distill parses compiler, lint, XCTest, and Cargo output into deterministic records. Cargo test summaries include pass/fail/skipped counts; recognized test failures include failed cases. `xcode list` reports projects/workspaces, targets, configurations, and schemes. Test summaries omit successful case details.
 
 ## Output contract
 

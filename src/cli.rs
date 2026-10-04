@@ -28,10 +28,11 @@ struct Cli {
 
 #[derive(Debug, Clone, Args)]
 struct ActionArgs {
-    /// Forward args after `--`.
-    #[arg(last = true, value_name = "ARG", allow_hyphen_values = true)]
+    /// Forward arguments to the selected tool.
+    #[arg(value_name = "ARG", allow_hyphen_values = true)]
     forwarded: Vec<OsString>,
 }
+
 #[derive(Debug, Clone, Args)]
 struct CargoActionArgs {
     /// Use the nightly-aarch64-apple-darwin Rust toolchain.
@@ -391,7 +392,10 @@ mod tests {
                 .expect("valid invocation")
                 .nightly
         );
-        assert!(parse_args(&["swift", "build", "--nightly"]).is_err());
+        let swift = parse_args(&["swift", "build", "--nightly"])
+            .expect("unrecognized tool options are forwarded");
+        assert!(!swift.nightly);
+        assert_eq!(swift.forwarded_args, [OsString::from("--nightly")]);
     }
 
     #[test]
@@ -424,6 +428,26 @@ mod tests {
         assert_eq!(invocation.forwarded_args.len(), 3);
         assert_eq!(invocation.forwarded_args[0], OsString::from("-scheme"));
         assert_eq!(invocation.forwarded_args[2], OsString::from("--cwd"));
+    }
+
+    #[test]
+    fn forwards_tool_flags_without_separator() {
+        let invocation = parse_args(&["cargo", "test", "--locked", "--offline", "--all-targets"])
+            .expect("valid invocation");
+
+        assert_eq!(
+            invocation.forwarded_args,
+            ["--locked", "--offline", "--all-targets"].map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn parses_wrapper_flags_alongside_unseparated_tool_flags() {
+        let invocation = parse_args(&["cargo", "test", "--timeout", "5m", "--all-targets"])
+            .expect("valid invocation");
+
+        assert_eq!(invocation.options.timeout, Some(Duration::from_secs(300)));
+        assert_eq!(invocation.forwarded_args, [OsString::from("--all-targets")]);
     }
 
     #[test]
@@ -532,6 +556,8 @@ mod tests {
             .render_help()
             .to_string();
 
+        assert!(cargo_build_help.contains("--nightly"));
+        assert!(!swift_build_help.contains("--nightly"));
         for option in ["--open", "--mv", "--omv", "--wait", "--stream"] {
             assert!(xcode_help.contains(option));
             assert!(xcode_build_help.contains(option));
