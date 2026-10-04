@@ -1,0 +1,502 @@
+name: Publish GitHub Release
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: New vX.Y.Z tag to create on the default branch
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  create-tag:
+    name: Create release tag
+    if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: macos-latest
+    permissions:
+      actions: read
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.release_tag }}
+      sha: ${{ steps.tag.outputs.release_sha }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate release tag and successful CI
+        id: tag
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf 'Release tag must match vX.Y.Z: %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "$checked_out_sha" != "$GITHUB_SHA" ]]; then
+            printf 'Checkout SHA %s does not match workflow SHA %s\n' "$checked_out_sha" "$GITHUB_SHA" >&2
+            exit 1
+          fi
+          package_version="$(python3 -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("Cargo.toml").read_text())["package"]["version"])')"
+          if [[ "$RELEASE_TAG" != "v$package_version" ]]; then
+            printf 'Tag %s does not match package version v%s\n' "$RELEASE_TAG" "$package_version" >&2
+            exit 1
+          fi
+          ci_run_count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${checked_out_sha}&branch=${DEFAULT_BRANCH}&status=completed&per_page=100" --jq '[.workflow_runs[] | select(.conclusion == "success" and .event == "push")] | length')"
+          if [[ "$ci_run_count" == 0 ]]; then
+            printf 'No successful CI push run found for %s on %s\n' "$checked_out_sha" "$DEFAULT_BRANCH" >&2
+            exit 1
+          fi
+          default_branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha)"
+          compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${checked_out_sha}...${default_branch_sha}" --jq .status)"
+          if [[ "$compare_status" != ahead && "$compare_status" != identical ]]; then
+            printf 'Release commit %s is not contained in the default branch\n' "$checked_out_sha" >&2
+            exit 1
+          fi
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+            if [[ "$tag_sha" != "$checked_out_sha" ]]; then
+              printf 'Tag %s already points to %s, not %s\n' "$RELEASE_TAG" "$tag_sha" "$checked_out_sha" >&2
+              exit 1
+            fi
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f "ref=refs/tags/${RELEASE_TAG}" \
+              -f "sha=${checked_out_sha}" >/dev/null
+          fi
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+          if [[ "$tag_sha" != "$checked_out_sha" ]]; then
+            printf 'Tag %s points to %s, not %s\n' "$RELEASE_TAG" "$tag_sha" "$checked_out_sha" >&2
+            exit 1
+          fi
+          printf 'release_tag=%s\nrelease_sha=%s\n' "$RELEASE_TAG" "$checked_out_sha" >> "$GITHUB_OUTPUT"
+  release-build:
+    name: Build release assets
+    needs: create-tag
+    outputs:
+      tag: ${{ steps.verify.outputs.release_tag }}
+      sha: ${{ steps.verify.outputs.release_sha }}
+    if: >-
+      always() &&
+      ((github.event_name == 'workflow_dispatch' &&
+        github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+        needs.create-tag.result == 'success') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        startsWith(github.event.workflow_run.head_branch, 'v')))
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || needs.create-tag.outputs.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: Verify tag and trusted source commit
+        id: verify
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha || needs.create-tag.outputs.sha }}
+          RELEASE_TAG: ${{ github.event.workflow_run.head_branch || needs.create-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf 'Release tag must match vX.Y.Z: %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ "$checked_out_sha" != "$WORKFLOW_SHA" ]]; then
+            printf 'Checkout SHA %s does not match release SHA %s\n' "$checked_out_sha" "$WORKFLOW_SHA" >&2
+            exit 1
+          fi
+          tag_ref="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" --jq .ref)"
+          if [[ "$tag_ref" != "refs/tags/${RELEASE_TAG}" ]]; then
+            printf 'Expected tag ref refs/tags/%s, got %s\n' "$RELEASE_TAG" "$tag_ref" >&2
+            exit 1
+          fi
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+          if [[ "$tag_sha" != "$checked_out_sha" ]]; then
+            printf 'Tag %s points to %s, not checked-out SHA %s\n' "$RELEASE_TAG" "$tag_sha" "$checked_out_sha" >&2
+            exit 1
+          fi
+          default_branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha)"
+          compare_status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${checked_out_sha}...${default_branch_sha}" --jq .status)"
+          if [[ "$compare_status" != ahead && "$compare_status" != identical ]]; then
+            printf 'Release commit %s is not contained in the default branch\n' "$checked_out_sha" >&2
+            exit 1
+          fi
+          printf 'release_tag=%s\nrelease_sha=%s\n' "$RELEASE_TAG" "$checked_out_sha" >> "$GITHUB_OUTPUT"
+      - name: Verify package version
+        env:
+          RELEASE_TAG: ${{ steps.verify.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          package_version="$(cargo read-manifest | python3 -c 'import json, sys; print(json.load(sys.stdin)["version"])')"
+          if [[ "$RELEASE_TAG" != "v$package_version" ]]; then
+            printf 'Tag %s does not match package version v%s\n' "$RELEASE_TAG" "$package_version" >&2
+            exit 1
+          fi
+      - name: Build macOS release binaries
+        env:
+          DIST_DIR: ${{ runner.temp }}/distill-release
+          RELEASE_TAG: ${{ steps.verify.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$DIST_DIR"
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --locked --release --target "$target"
+            tar -czf "$DIST_DIR/distill-${RELEASE_TAG}-${target}.tar.gz" -C "target/$target/release" distill
+          done
+          (cd "$DIST_DIR" && shasum -a 256 distill-*.tar.gz > SHA256SUMS)
+      - name: Prepare release changelog and asset hashes
+        env:
+          DIST_DIR: ${{ runner.temp }}/distill-release
+          RELEASE_SHA: ${{ steps.verify.outputs.release_sha }}
+          RELEASE_TAG: ${{ steps.verify.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
+          import re
+
+          def sha256(path):
+              digest = hashlib.sha256()
+              with path.open("rb") as asset:
+                  for chunk in iter(lambda: asset.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          changelog = Path("CHANGELOG.md").read_text()
+          match = re.search(
+              r"^## Unreleased[ \t]*\r?\n(.*?)(?=^## |\Z)",
+              changelog,
+              flags=re.MULTILINE | re.DOTALL,
+          )
+          if match is None:
+              raise SystemExit("CHANGELOG.md is missing an Unreleased section")
+          changes = match.group(1).strip()
+          if not changes or changes == "No entries yet.":
+              raise SystemExit("CHANGELOG.md Unreleased section has no entries")
+
+          output_dir = Path(os.environ["DIST_DIR"])
+          arm64 = output_dir / f"distill-{os.environ['RELEASE_TAG']}-aarch64-apple-darwin.tar.gz"
+          x86_64 = output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-apple-darwin.tar.gz"
+          with (output_dir / "release-changelog.md").open("w") as notes:
+              notes.write("## Changelog\n\n")
+              notes.write(changes)
+              notes.write(
+                  f"\n\n<!-- distill-release source={os.environ['RELEASE_SHA']} "
+                  f"aarch64={sha256(arm64)} x86_64={sha256(x86_64)} "
+                  f"sha256sums={sha256(output_dir / 'SHA256SUMS')} -->\n"
+              )
+          PY
+      - name: Upload release assets for publishing
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: distill-release-${{ github.run_id }}
+          overwrite: true
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/distill-release/distill-${{ steps.verify.outputs.release_tag }}-aarch64-apple-darwin.tar.gz
+            ${{ runner.temp }}/distill-release/distill-${{ steps.verify.outputs.release_tag }}-x86_64-apple-darwin.tar.gz
+            ${{ runner.temp }}/distill-release/SHA256SUMS
+            ${{ runner.temp }}/distill-release/release-changelog.md
+  attest:
+    name: Attest public release assets
+    if: github.event.repository.visibility == 'public'
+    needs: release-build
+    runs-on: macos-latest
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Download release assets for attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" \
+            --name "distill-release-$GITHUB_RUN_ID" \
+            --dir "$RUNNER_TEMP/distill-release"
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ runner.temp }}/distill-release/distill-*.tar.gz
+            ${{ runner.temp }}/distill-release/SHA256SUMS
+  release:
+    name: Publish GitHub Release
+    needs: [release-build, attest]
+    if: >-
+      always() &&
+      needs.release-build.result == 'success' &&
+      (needs.attest.result == 'success' || needs.attest.result == 'skipped')
+    runs-on: macos-latest
+    concurrency:
+      group: release-${{ needs.release-build.outputs.tag }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          dist_dir="$RUNNER_TEMP/distill-release"
+          mkdir -p "$dist_dir"
+          gh run download "$GITHUB_RUN_ID" \
+            --name "distill-release-$GITHUB_RUN_ID" \
+            --dir "$dist_dir"
+      - name: Generate GitHub release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.release-build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f "tag_name=$RELEASE_TAG" \
+            --jq .body > "$RUNNER_TEMP/generated-release-notes.md"
+      - name: Compose release notes
+        env:
+          DIST_DIR: ${{ runner.temp }}/distill-release
+          GENERATED_NOTES: ${{ runner.temp }}/generated-release-notes.md
+          RELEASE_NOTES: ${{ runner.temp }}/release-notes.md
+          RELEASE_SHA: ${{ needs.release-build.outputs.sha }}
+          RELEASE_TAG: ${{ needs.release-build.outputs.tag }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
+          import re
+
+          output_dir = Path(os.environ["DIST_DIR"])
+          changelog_path = output_dir / "release-changelog.md"
+          changelog = changelog_path.read_text()
+          marker = re.search(
+              r"(<!-- distill-release source=([0-9a-f]+) aarch64=([0-9a-f]{64}) x86_64=([0-9a-f]{64}) sha256sums=([0-9a-f]{64}) -->)\s*\Z",
+              changelog,
+          )
+          if marker is None or marker.group(2) != os.environ["RELEASE_SHA"]:
+              raise SystemExit("Release changelog has no valid terminal digest marker")
+
+          archives = (
+              (output_dir / f"distill-{os.environ['RELEASE_TAG']}-aarch64-apple-darwin.tar.gz", marker.group(3)),
+              (output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-apple-darwin.tar.gz", marker.group(4)),
+          )
+          for path, expected in archives:
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              if digest != expected:
+                  raise SystemExit(f"Release artifact hash mismatch: {path.name}")
+          sums_path = output_dir / "SHA256SUMS"
+          expected_sums = "".join(f"{digest}  {path.name}\n" for path, digest in archives)
+          if sums_path.read_text() != expected_sums:
+              raise SystemExit("SHA256SUMS does not match the release archives")
+          if hashlib.sha256(sums_path.read_bytes()).hexdigest() != marker.group(5):
+              raise SystemExit("Release checksum-file hash mismatch")
+
+          generated = Path(os.environ["GENERATED_NOTES"]).read_text().strip()
+          body = changelog[:marker.start()].rstrip()
+          if generated:
+              body += "\n\n## GitHub-generated notes\n\n" + generated
+          repository = os.environ["GITHUB_REPOSITORY"]
+          body += (
+              "\n\n## Verify downloads\n\n"
+              "Download `SHA256SUMS` with both archives, then run:\n\n"
+              "```sh\n"
+              "shasum -a 256 --check SHA256SUMS\n"
+              "```\n\n"
+          )
+          if os.environ["REPOSITORY_VISIBILITY"] == "public":
+              body += (
+                  "GitHub build provenance attestations are published for both archives and `SHA256SUMS`. "
+                  "Verify a downloaded asset with GitHub CLI:\n\n"
+                  "```sh\n"
+                  f"gh attestation verify <asset> --repo {repository}\n"
+                  "```\n"
+              )
+          else:
+              body += "GitHub build provenance attestations are generated only for public repositories.\n"
+          body += "\n\n" + marker.group(1) + "\n"
+          Path(os.environ["RELEASE_NOTES"]).write_text(body)
+          PY
+      - name: Publish or resume GitHub Release
+        env:
+          DIST_DIR: ${{ runner.temp }}/distill-release
+          RELEASE_NOTES: ${{ runner.temp }}/release-notes.md
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.release-build.outputs.sha }}
+          RELEASE_TAG: ${{ needs.release-build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          arm64_name="distill-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz"
+          x86_64_name="distill-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz"
+          arm64_asset="$DIST_DIR/$arm64_name"
+          x86_64_asset="$DIST_DIR/$x86_64_name"
+          sha256sums_name="SHA256SUMS"
+          sha256sums_asset="$DIST_DIR/$sha256sums_name"
+          notes_file="$RELEASE_NOTES"
+          release_json="$RUNNER_TEMP/release.json"
+
+          python3 - "$DIST_DIR" "$arm64_name" "$x86_64_name" <<'PY'
+          from pathlib import Path
+          import sys
+
+          directory = Path(sys.argv[1])
+          expected = {sys.argv[2], sys.argv[3], "SHA256SUMS", "release-changelog.md"}
+          actual = {path.name for path in directory.iterdir()}
+          if actual != expected:
+              raise SystemExit(f"Unexpected release artifact set: {sorted(actual)}")
+          if any(path.is_symlink() or not path.is_file() for path in directory.iterdir()):
+              raise SystemExit("Release artifacts must be regular files")
+          PY
+
+          expected_hashes="$(python3 - "$notes_file" "$RELEASE_SHA" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          text = Path(sys.argv[1]).read_text()
+          marker = re.search(
+              r"<!-- distill-release source=([0-9a-f]+) aarch64=([0-9a-f]{64}) x86_64=([0-9a-f]{64}) sha256sums=([0-9a-f]{64}) -->\s*\Z",
+              text,
+          )
+          if marker is None or marker.group(1) != sys.argv[2]:
+              raise SystemExit("Release notes have no valid terminal digest marker")
+          print(marker.group(2), marker.group(3), marker.group(4))
+          PY
+          )"
+          read -r expected_arm64_sha expected_x86_64_sha expected_sums_sha <<< "$expected_hashes"
+
+          verify_tag_sha() {
+            local tag_sha
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null
+            tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+            if [[ "$tag_sha" != "$RELEASE_SHA" ]]; then
+              printf 'Tag %s points to %s, not checked-out release SHA %s\n' "$RELEASE_TAG" "$tag_sha" "$RELEASE_SHA" >&2
+              exit 1
+            fi
+          }
+
+          read_release_state() {
+            python3 - "$release_json" "$RELEASE_SHA" "$RELEASE_TAG" "$arm64_name" "$x86_64_name" "$sha256sums_name" "$expected_arm64_sha" "$expected_x86_64_sha" "$expected_sums_sha" "$1" <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          release = json.loads(Path(sys.argv[1]).read_text())
+          source_sha, tag, arm64, x86_64, sums, expected_arm64, expected_x86_64, expected_sums, mode = sys.argv[2:]
+          if release["tagName"] != tag:
+              raise SystemExit("Existing release has an unexpected tag")
+          marker = re.search(
+              r"<!-- distill-release source=([0-9a-f]+) aarch64=([0-9a-f]{64}) x86_64=([0-9a-f]{64}) sha256sums=([0-9a-f]{64}) -->\s*\Z",
+              release.get("body") or "",
+          )
+          if marker is None or marker.group(1) != source_sha:
+              raise SystemExit("Existing release is not from this workflow commit")
+          if marker.group(2, 3, 4) != (expected_arm64, expected_x86_64, expected_sums):
+              raise SystemExit("Existing release digest marker does not match this build")
+          expected = {arm64, x86_64, sums}
+          actual = {asset["name"] for asset in release["assets"]}
+          if release["isDraft"]:
+              if mode == "complete" and actual != expected:
+                  raise SystemExit("Draft assets do not match this build")
+              if mode != "complete" and not actual <= expected:
+                  raise SystemExit(f"Unexpected draft asset set: {sorted(actual)}")
+              print("draft", marker.group(2), marker.group(3), marker.group(4))
+          else:
+              if actual != expected:
+                  raise SystemExit(f"Unexpected published asset set: {sorted(actual)}")
+              print("published", marker.group(2), marker.group(3), marker.group(4))
+          PY
+          }
+
+          verify_assets() {
+            local download_dir="$1"
+            local expected_arm64="$2"
+            local expected_x86_64="$3"
+            local expected_sums="$4"
+            rm -rf "$download_dir"
+            mkdir -p "$download_dir"
+            gh release download "$RELEASE_TAG" \
+              --dir "$download_dir" \
+              --pattern "$arm64_name" \
+              --pattern "$x86_64_name" \
+              --pattern "$sha256sums_name"
+            python3 - "$download_dir" "$arm64_name" "$x86_64_name" "$sha256sums_name" "$expected_arm64" "$expected_x86_64" "$expected_sums" <<'PY'
+          from pathlib import Path
+          import hashlib
+          import sys
+
+          directory = Path(sys.argv[1])
+          for name, expected in zip(sys.argv[2:5], sys.argv[5:]):
+              path = directory / name
+              if path.is_symlink() or not path.is_file():
+                  raise SystemExit(f"Missing or invalid release asset: {name}")
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              if digest != expected:
+                  raise SystemExit(f"Release asset hash mismatch: {name}")
+          PY
+          }
+
+          verify_tag_sha
+          if gh release view "$RELEASE_TAG" --json tagName,isDraft,body,assets > "$release_json"; then
+            release_state="$(read_release_state partial)"
+          else
+            gh release create "$RELEASE_TAG" \
+              --verify-tag \
+              --draft \
+              --title "$RELEASE_TAG" \
+              --notes-file "$notes_file"
+            release_state="draft - - -"
+          fi
+
+          read -r state recorded_arm64_sha recorded_x86_64_sha recorded_sums_sha <<< "$release_state"
+          if [[ "$state" == "published" ]]; then
+            verify_assets "$RUNNER_TEMP/release-published" "$recorded_arm64_sha" "$recorded_x86_64_sha" "$recorded_sums_sha"
+            verify_tag_sha
+            printf 'Release %s already published with verified assets.\n' "$RELEASE_TAG"
+            exit 0
+          fi
+
+          gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$notes_file"
+          gh release upload "$RELEASE_TAG" "$arm64_asset" "$x86_64_asset" "$sha256sums_asset" --clobber
+          gh release view "$RELEASE_TAG" --json tagName,isDraft,body,assets > "$release_json"
+          release_state="$(read_release_state complete)"
+          read -r state recorded_arm64_sha recorded_x86_64_sha recorded_sums_sha <<< "$release_state"
+          if [[ "$state" != "draft" ]]; then
+            printf 'Release %s changed unexpectedly before publication.\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+          verify_assets "$RUNNER_TEMP/release-draft" "$expected_arm64_sha" "$expected_x86_64_sha" "$expected_sums_sha"
+          verify_tag_sha
+          gh release edit "$RELEASE_TAG" --draft=false

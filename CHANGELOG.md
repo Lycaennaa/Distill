@@ -4,4 +4,4 @@ Notable user-visible changes are recorded here.
 
 ## Unreleased
 
-No entries yet.
+- Document Cargo installation from Git, including tag pinning.
