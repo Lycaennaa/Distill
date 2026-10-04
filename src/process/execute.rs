@@ -189,6 +189,9 @@ fn execute_inner(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (key, value) in spec.environment() {
+        command.env(key, value);
+    }
     if let Some(cwd) = spec.cwd() {
         command.current_dir(cwd);
     }

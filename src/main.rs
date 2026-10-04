@@ -4,10 +4,10 @@ use std::time::{Duration, Instant};
 
 use distill::artifact::Artifact;
 use distill::cli::parse;
-use distill::command::{CommandBuildError, command_for_with_cancellation, has_user_verbosity};
+use distill::command::{CommandBuildError, command_for_with_cancellation};
 use distill::process::{CancellationToken, Execution, install_interrupt_handler};
 use distill::record::{Record, RecordKind};
-use distill::{Action, DiscoveryError, RedactionPolicy, StatusClass, Tool, redact};
+use distill::{DiscoveryError, RedactionPolicy, StatusClass, Tool, redact};
 mod cli_execution;
 
 fn main() -> ExitCode {
@@ -68,7 +68,7 @@ fn main() -> ExitCode {
     };
 
     if invocation.is_plan() {
-        let injected = plan_injected_flags(&invocation, &spec);
+        let injected = plan_injected_flags(&spec);
         emit(
             RecordKind::Plan,
             &format!(
@@ -103,59 +103,17 @@ fn main() -> ExitCode {
     )
 }
 
-fn plan_injected_flags(invocation: &distill::Invocation, spec: &distill::CommandSpec) -> String {
-    let has_flag = |names: &[&str]| -> bool {
-        invocation
-            .forwarded_args()
-            .iter()
-            .take_while(|argument| argument.to_str() != Some("--"))
-            .any(|argument| argument.to_str().is_some_and(|text| names.contains(&text)))
-    };
-    let has_verbosity = has_user_verbosity(invocation.forwarded_args());
-    let has_message_format = invocation
-        .forwarded_args()
+fn plan_injected_flags(spec: &distill::CommandSpec) -> String {
+    let mut flags = spec
+        .injected_options()
         .iter()
-        .take_while(|argument| argument.to_str() != Some("--"))
-        .any(|argument| {
-            argument.to_str().is_some_and(|text| {
-                text == "--message-format"
-                    || text
-                        .strip_prefix("--message-format")
-                        .is_some_and(|suffix| suffix.starts_with('='))
-            })
-        });
-    let has_spec_argument = |name: &str| spec.arguments().iter().any(|argument| argument == name);
-    let mut flags = Vec::new();
-    if invocation.tool() == Tool::Xcode {
-        for option in ["-workspace", "-project"] {
-            if has_spec_argument(option) && !has_flag(&[option]) {
-                flags.push(option);
-            }
-        }
-    }
-    match (invocation.tool(), invocation.action()) {
-        (Tool::Xcode, Action::Build | Action::Test)
-            if has_spec_argument("-quiet") && !has_verbosity =>
-        {
-            flags.push("-quiet");
-        }
-        (Tool::Swift, Action::Build | Action::Test)
-            if has_spec_argument("--quiet") && !has_verbosity =>
-        {
-            flags.push("--quiet");
-        }
-        (Tool::Cargo, Action::Build | Action::Test | Action::Package | Action::Clippy) => {
-            if has_spec_argument("--quiet") && !has_verbosity {
-                flags.push("--quiet");
-            }
-            if has_spec_argument("--message-format=json-diagnostic-rendered-ansi")
-                && !has_message_format
-            {
-                flags.push("--message-format=json-diagnostic-rendered-ansi");
-            }
-        }
-        _ => {}
-    }
+        .map(|option| option.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    flags.extend(
+        spec.environment()
+            .iter()
+            .map(|(key, value)| format!("{}={}", key.to_string_lossy(), value.to_string_lossy())),
+    );
     if flags.is_empty() {
         "none".to_owned()
     } else {

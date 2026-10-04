@@ -118,6 +118,10 @@ fn inferred_xcode_project_is_injected_and_sets_project_root() -> TestResult {
     assert!(spec.arguments().contains(&OsString::from("-project")));
     assert!(spec.arguments().contains(&project.as_os_str().to_owned()));
     assert!(spec.arguments().contains(&OsString::from("-quiet")));
+    assert_eq!(
+        spec.injected_options(),
+        &[OsString::from("-project"), OsString::from("-quiet")]
+    );
     drop(fs::remove_dir_all(root));
     Ok(())
 }

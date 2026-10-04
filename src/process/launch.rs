@@ -60,6 +60,9 @@ pub fn spawn_detached_until(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    for (key, value) in spec.environment() {
+        command.env(key, value);
+    }
     if let Some(cwd) = spec.cwd() {
         command.current_dir(cwd);
     }

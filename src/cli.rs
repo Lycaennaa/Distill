@@ -32,6 +32,15 @@ struct ActionArgs {
     #[arg(last = true, value_name = "ARG", allow_hyphen_values = true)]
     forwarded: Vec<OsString>,
 }
+#[derive(Debug, Clone, Args)]
+struct CargoActionArgs {
+    /// Use the nightly-aarch64-apple-darwin Rust toolchain.
+    #[arg(long)]
+    nightly: bool,
+
+    #[command(flatten)]
+    action: ActionArgs,
+}
 
 #[derive(Debug, Clone, Subcommand)]
 enum ToolCommand {
@@ -69,11 +78,11 @@ enum SwiftCommand {
 
 #[derive(Debug, Clone, Subcommand)]
 enum CargoCommand {
-    Build(ActionArgs),
-    Test(ActionArgs),
-    Fmt(ActionArgs),
-    Package(ActionArgs),
-    Clippy(ActionArgs),
+    Build(CargoActionArgs),
+    Test(CargoActionArgs),
+    Fmt(CargoActionArgs),
+    Package(CargoActionArgs),
+    Clippy(CargoActionArgs),
 }
 
 /// Non-action wrapper settings retained by the validated invocation.
@@ -181,6 +190,7 @@ pub struct Invocation {
     pub(crate) options: WrapperOptions,
     pub(crate) post_action: Option<PostAction>,
     pub(crate) forwarded_args: Vec<OsString>,
+    pub(crate) nightly: bool,
 }
 
 impl Invocation {
@@ -251,23 +261,48 @@ where
     T: Into<OsString> + Clone,
 {
     let cli = Cli::try_parse_from(arguments)?;
-    let (tool, action, forwarded_args) = match cli.command {
+    let (tool, action, forwarded_args, nightly) = match cli.command {
         ToolCommand::Xcode(command) => match command {
-            XcodeCommand::Build(args) => (Tool::Xcode, Action::Build, args.forwarded),
-            XcodeCommand::Test(args) => (Tool::Xcode, Action::Test, args.forwarded),
-            XcodeCommand::List(args) => (Tool::Xcode, Action::List, args.forwarded),
+            XcodeCommand::Build(args) => (Tool::Xcode, Action::Build, args.forwarded, false),
+            XcodeCommand::Test(args) => (Tool::Xcode, Action::Test, args.forwarded, false),
+            XcodeCommand::List(args) => (Tool::Xcode, Action::List, args.forwarded, false),
         },
         ToolCommand::Swift(command) => match command {
-            SwiftCommand::Build(args) => (Tool::Swift, Action::Build, args.forwarded),
-            SwiftCommand::Test(args) => (Tool::Swift, Action::Test, args.forwarded),
-            SwiftCommand::Lint(args) => (Tool::Swift, Action::Lint, args.forwarded),
+            SwiftCommand::Build(args) => (Tool::Swift, Action::Build, args.forwarded, false),
+            SwiftCommand::Test(args) => (Tool::Swift, Action::Test, args.forwarded, false),
+            SwiftCommand::Lint(args) => (Tool::Swift, Action::Lint, args.forwarded, false),
         },
         ToolCommand::Cargo(command) => match command {
-            CargoCommand::Build(args) => (Tool::Cargo, Action::Build, args.forwarded),
-            CargoCommand::Test(args) => (Tool::Cargo, Action::Test, args.forwarded),
-            CargoCommand::Fmt(args) => (Tool::Cargo, Action::Fmt, args.forwarded),
-            CargoCommand::Package(args) => (Tool::Cargo, Action::Package, args.forwarded),
-            CargoCommand::Clippy(args) => (Tool::Cargo, Action::Clippy, args.forwarded),
+            CargoCommand::Build(args) => (
+                Tool::Cargo,
+                Action::Build,
+                args.action.forwarded,
+                args.nightly,
+            ),
+            CargoCommand::Test(args) => (
+                Tool::Cargo,
+                Action::Test,
+                args.action.forwarded,
+                args.nightly,
+            ),
+            CargoCommand::Fmt(args) => (
+                Tool::Cargo,
+                Action::Fmt,
+                args.action.forwarded,
+                args.nightly,
+            ),
+            CargoCommand::Package(args) => (
+                Tool::Cargo,
+                Action::Package,
+                args.action.forwarded,
+                args.nightly,
+            ),
+            CargoCommand::Clippy(args) => (
+                Tool::Cargo,
+                Action::Clippy,
+                args.action.forwarded,
+                args.nightly,
+            ),
         },
     };
 
@@ -285,6 +320,7 @@ where
         options,
         post_action,
         forwarded_args,
+        nightly,
     })
 }
 
@@ -343,6 +379,19 @@ mod tests {
         ] {
             assert!(parse_args(args).is_ok(), "args: {args:?}");
         }
+    }
+
+    #[test]
+    fn cargo_nightly_selects_toolchain_and_is_cargo_only() {
+        let invocation = parse_args(&["cargo", "build", "--nightly"]).expect("valid invocation");
+
+        assert!(invocation.nightly);
+        assert!(
+            !parse_args(&["cargo", "build"])
+                .expect("valid invocation")
+                .nightly
+        );
+        assert!(parse_args(&["swift", "build", "--nightly"]).is_err());
     }
 
     #[test]

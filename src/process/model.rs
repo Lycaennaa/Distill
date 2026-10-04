@@ -14,6 +14,8 @@ use crate::status::{Status, StatusClass, StatusError, StatusReport};
 pub struct CommandSpec {
     program: OsString,
     args: Vec<OsString>,
+    injected_options: Vec<OsString>,
+    environment: Vec<(OsString, OsString)>,
     cwd: Option<PathBuf>,
     label: String,
     status_class: StatusClass,
@@ -25,9 +27,11 @@ impl CommandSpec {
         Self {
             program: program.into(),
             args: Vec::new(),
+            injected_options: Vec::new(),
             cwd: None,
             label: "child".to_owned(),
             status_class: StatusClass::Compile,
+            environment: Vec::new(),
         }
     }
 
@@ -38,12 +42,26 @@ impl CommandSpec {
     }
 
     #[must_use]
+    pub(crate) fn injected_arg(mut self, argument: impl Into<OsString>) -> Self {
+        let argument = argument.into();
+        self.args.push(argument.clone());
+        self.injected_options.push(argument);
+        self
+    }
+
+    #[must_use]
     pub fn args<I, T>(mut self, arguments: I) -> Self
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString>,
     {
         self.args.extend(arguments.into_iter().map(Into::into));
+        self
+    }
+
+    #[must_use]
+    pub fn env(mut self, key: impl Into<OsString>, value: impl Into<OsString>) -> Self {
+        self.environment.push((key.into(), value.into()));
         self
     }
 
@@ -73,6 +91,16 @@ impl CommandSpec {
     #[must_use]
     pub fn arguments(&self) -> &[OsString] {
         &self.args
+    }
+
+    #[must_use]
+    pub fn injected_options(&self) -> &[OsString] {
+        &self.injected_options
+    }
+
+    #[must_use]
+    pub fn environment(&self) -> &[(OsString, OsString)] {
+        &self.environment
     }
 
     #[must_use]

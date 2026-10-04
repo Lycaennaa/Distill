@@ -76,7 +76,11 @@ fn command_for_with_context(
     check_deadline(context, discovery.root()).map_err(CommandBuildError::Discovery)?;
     let label = format!("{} {}", invocation.tool(), invocation.action());
     let (program, child_action, status_class) = command_mapping(invocation);
-    let mut arguments = vec![OsString::from(child_action)];
+    let mut spec = CommandSpec::new(program)
+        .arg(child_action)
+        .label(label)
+        .with_status_class(status_class)
+        .current_dir(discovery.root().to_owned());
 
     if invocation.tool() == Tool::Xcode
         && !discovery.is_explicit()
@@ -88,24 +92,21 @@ fn command_for_with_context(
             _ => "",
         };
         if !option.is_empty() {
-            arguments.push(OsString::from(option));
-            arguments.push(marker.as_os_str().to_owned());
+            spec = spec.injected_arg(option);
+            spec = spec.arg(marker.as_os_str().to_owned());
         }
     }
 
     let forwarded = normalized_forwarded_args(invocation, &discovery);
-    arguments.extend(automatic_flags(
-        invocation.tool(),
-        invocation.action(),
-        &forwarded,
-    ));
-    arguments.extend(forwarded);
+    for option in automatic_flags(invocation.tool(), invocation.action(), &forwarded) {
+        spec = spec.injected_arg(option);
+    }
+    spec = spec.args(forwarded);
 
-    Ok(CommandSpec::new(program)
-        .args(arguments)
-        .label(label)
-        .with_status_class(status_class)
-        .current_dir(discovery.root().to_owned()))
+    if invocation.nightly {
+        spec = spec.env("RUSTUP_TOOLCHAIN", "nightly-aarch64-apple-darwin");
+    }
+    Ok(spec)
 }
 
 fn normalized_forwarded_args(invocation: &Invocation, discovery: &Discovery) -> Vec<OsString> {
@@ -294,6 +295,28 @@ mod tests {
             ]
         );
         assert_eq!(spec.status_class(), StatusClass::Compile);
+    }
+
+    #[test]
+    fn cargo_nightly_sets_toolchain_environment_without_forwarding_flag() {
+        let invocation = invocation(&["cargo", "build", "--nightly"]);
+        let spec = command_for(&invocation).expect("command should build");
+
+        assert_eq!(
+            spec.environment(),
+            &[(
+                OsString::from("RUSTUP_TOOLCHAIN"),
+                OsString::from("nightly-aarch64-apple-darwin")
+            )]
+        );
+        assert!(!spec.arguments().contains(&OsString::from("--nightly")));
+        assert_eq!(
+            spec.injected_options(),
+            &[
+                OsString::from("--quiet"),
+                OsString::from("--message-format=json-diagnostic-rendered-ansi")
+            ]
+        );
     }
 
     #[test]

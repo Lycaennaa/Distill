@@ -7,7 +7,7 @@ use std::error::Error;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Command, Output};
 
 #[path = "support/mod.rs"]
 mod support;
@@ -82,6 +82,7 @@ test)
   ;;
 package)
   printf 'received args: %s\n' "$*" >&2
+  printf 'toolchain: %s\n' "$RUSTUP_TOOLCHAIN" >&2
   exit 1
   ;;
 esac
@@ -101,6 +102,24 @@ fn run_cargo(root: &Path, bin: &Path, arguments: &[&str]) -> std::io::Result<Out
     let mut command_arguments = vec!["--cwd", cwd];
     command_arguments.extend_from_slice(arguments);
     run_distill(&command_arguments, bin)
+}
+
+fn run_cargo_with_parent_toolchain(
+    root: &Path,
+    bin: &Path,
+    arguments: &[&str],
+    parent_toolchain: &str,
+) -> std::io::Result<Output> {
+    let cwd = root
+        .to_str()
+        .ok_or_else(|| std::io::Error::other("fixture path is not UTF-8"))?;
+    let mut command_arguments = vec!["--cwd", cwd];
+    command_arguments.extend_from_slice(arguments);
+    Command::new(env!("CARGO_BIN_EXE_distill"))
+        .args(command_arguments)
+        .env("PATH", bin)
+        .env("RUSTUP_TOOLCHAIN", parent_toolchain)
+        .output()
 }
 
 #[test]
@@ -162,6 +181,29 @@ fn cargo_package_forwards_common_flags() -> TestResult {
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("received args: package --quiet --locked --offline"));
     assert!(stdout.contains("class=compile owner=child"));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn cargo_nightly_selects_toolchain_and_is_visible_in_plan() -> TestResult {
+    let (root, bin) = fake_cargo_fixture("cargo-nightly")?;
+    let plan = run_cargo(&root, &bin, &["--plan", "cargo", "build", "--nightly"])?;
+    let plan_stdout = String::from_utf8(plan.stdout)?;
+    assert!(plan_stdout.contains(
+        "injected=--quiet,--message-format=json-diagnostic-rendered-ansi,RUSTUP_TOOLCHAIN=nightly-aarch64-apple-darwin"
+    ));
+
+    let output = run_cargo_with_parent_toolchain(
+        &root,
+        &bin,
+        &["cargo", "package", "--nightly", "--", "--locked"],
+        "stable",
+    )?;
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("toolchain: nightly-aarch64-apple-darwin"));
+    assert!(stdout.contains("received args: package --quiet --locked"));
     fs::remove_dir_all(root)?;
     Ok(())
 }
