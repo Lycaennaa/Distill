@@ -2,17 +2,17 @@ default: check
 
 check: fmt test clippy
 
-fmt:
+@fmt:
     cargo fmt --all -- --check
 
-test:
+@test:
     cargo test --locked --all-targets
 
-clippy:
+@clippy:
     if command -v distill >/dev/null 2>&1; then distill cargo clippy -- --locked --all-targets -- -D warnings; else cargo clippy --locked --all-targets -- -D warnings; fi
 
-build:
+@build:
     if command -v distill >/dev/null 2>&1; then distill cargo build -- --locked; else cargo build --locked; fi
 
-package:
+@package:
     cargo package --locked --allow-dirty
