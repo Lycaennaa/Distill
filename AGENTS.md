@@ -16,3 +16,5 @@
 - `just check` runs formatting, tests, and Clippy when Just is installed. `just build` and `just clippy` use `distill` when available and fall back to Cargo.
 
 CI's real Swift/Cargo smoke tests run on macOS. See `.github/workflows/ci.yml` for the full pipeline.
+
+There is a justfile for convenience and always confirm your newer changes work with newly build ./target/debug/distill.
