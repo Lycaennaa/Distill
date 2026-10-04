@@ -142,6 +142,9 @@ const fn command_mapping(invocation: &Invocation) -> (&'static str, &'static str
         (Tool::Swift, Action::Test) => ("swift", "test", StatusClass::Test),
         (Tool::Swift, Action::Lint) => ("swiftlint", "lint", StatusClass::Lint),
         (Tool::Cargo, Action::Build) => ("cargo", "build", StatusClass::Compile),
+        (Tool::Cargo, Action::Test) => ("cargo", "test", StatusClass::Test),
+        (Tool::Cargo, Action::Fmt) => ("cargo", "fmt", StatusClass::Lint),
+        (Tool::Cargo, Action::Package) => ("cargo", "package", StatusClass::Compile),
         (Tool::Cargo, Action::Clippy) => ("cargo", "clippy", StatusClass::Lint),
         _ => ("", "", StatusClass::Compile),
     }
@@ -155,12 +158,12 @@ fn automatic_flags(tool: Tool, action: Action, forwarded: &[OsString]) -> Vec<Os
         (Tool::Swift, Action::Build | Action::Test) if !has_user_verbosity(forwarded) => {
             vec![OsString::from("--quiet")]
         }
-        (Tool::Cargo, Action::Build | Action::Clippy) => {
+        (Tool::Cargo, Action::Build | Action::Test | Action::Package | Action::Clippy) => {
             let mut flags = Vec::new();
             if !has_user_verbosity(forwarded) {
                 flags.push(OsString::from("--quiet"));
             }
-            if !has_long_option(forwarded, "--message-format") {
+            if action != Action::Package && !has_long_option(forwarded, "--message-format") {
                 flags.push(OsString::from(
                     "--message-format=json-diagnostic-rendered-ansi",
                 ));
@@ -226,6 +229,71 @@ mod tests {
             ]
         );
         assert_eq!(spec.status_class(), StatusClass::Lint);
+    }
+
+    #[test]
+    fn cargo_test_injects_diagnostic_flags_and_uses_test_status() {
+        let invocation = invocation(&["cargo", "test", "--", "--all-targets"]);
+        let spec = command_for(&invocation).expect("command should build");
+
+        assert_eq!(
+            spec.arguments(),
+            &[
+                OsString::from("test"),
+                OsString::from("--quiet"),
+                OsString::from("--message-format=json-diagnostic-rendered-ansi"),
+                OsString::from("--all-targets")
+            ]
+        );
+        assert_eq!(spec.status_class(), StatusClass::Test);
+    }
+
+    #[test]
+    fn cargo_fmt_forwards_options_without_diagnostic_flags() {
+        let invocation = invocation(&["cargo", "fmt", "--", "--check", "--all"]);
+        let spec = command_for(&invocation).expect("command should build");
+
+        assert_eq!(
+            spec.arguments(),
+            &[
+                OsString::from("fmt"),
+                OsString::from("--check"),
+                OsString::from("--all")
+            ]
+        );
+        assert_eq!(spec.status_class(), StatusClass::Lint);
+    }
+
+    #[test]
+    fn cargo_test_respects_user_verbosity_and_message_format() {
+        let invocation = invocation(&["cargo", "test", "--", "--verbose", "--message-format=json"]);
+        let spec = command_for(&invocation).expect("command should build");
+
+        assert_eq!(
+            spec.arguments(),
+            &[
+                OsString::from("test"),
+                OsString::from("--verbose"),
+                OsString::from("--message-format=json")
+            ]
+        );
+    }
+
+    #[test]
+    fn cargo_package_forwards_common_flags_without_json_injection() {
+        let invocation = invocation(&["cargo", "package", "--", "--locked", "--offline"]);
+        let spec = command_for(&invocation).expect("command should build");
+
+        assert_eq!(
+            spec.arguments(),
+            &[
+                OsString::from("package"),
+                OsString::from("--quiet"),
+                OsString::from("--locked"),
+                OsString::from("--offline")
+            ]
+        );
+        assert_eq!(spec.status_class(), StatusClass::Compile);
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::path::{Component, Path, PathBuf};
 
 use super::model::{Diagnostic, FALLBACK_LINE_LIMIT, OutputLine, Severity, Stream};
 use super::parser::{compact_text, parse_diagnostics};
+use super::test::{TestDigest, TestFailure, TestSummary};
 use super::xcode::XcodeDigest;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -221,6 +222,7 @@ pub struct Digest {
     stdout_tail: VecDeque<OutputLine>,
     stderr_tail: VecDeque<OutputLine>,
     xcode: XcodeDigest,
+    tests: TestDigest,
 }
 
 impl Digest {
@@ -234,6 +236,7 @@ impl Digest {
             self.add_diagnostic(&diagnostic);
         }
         self.xcode.ingest(line.text());
+        self.tests.ingest(line.text());
     }
 
     /// Add an adapter-produced diagnostic to the same grouping policy.
@@ -269,6 +272,7 @@ impl Digest {
             }
         }
         self.xcode.merge(&other.xcode);
+        self.tests.merge(&other.tests);
         append_tail(&mut self.stdout_tail, &other.stdout_tail, Stream::Stdout);
         append_tail(&mut self.stderr_tail, &other.stderr_tail, Stream::Stderr);
     }
@@ -289,6 +293,16 @@ impl Digest {
     #[must_use]
     pub const fn xcode(&self) -> &XcodeDigest {
         &self.xcode
+    }
+
+    #[must_use]
+    pub const fn test_summary(&self) -> &TestSummary {
+        self.tests.test_summary()
+    }
+
+    #[must_use]
+    pub fn test_failures(&self) -> &[TestFailure] {
+        self.tests.test_failures()
     }
 
     /// Select at most 20 lines from the two bounded stream tails.

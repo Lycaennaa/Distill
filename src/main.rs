@@ -144,7 +144,7 @@ fn plan_injected_flags(invocation: &distill::Invocation, spec: &distill::Command
         {
             flags.push("--quiet");
         }
-        (Tool::Cargo, Action::Build | Action::Clippy) => {
+        (Tool::Cargo, Action::Build | Action::Test | Action::Package | Action::Clippy) => {
             if has_spec_argument("--quiet") && !has_verbosity {
                 flags.push("--quiet");
             }

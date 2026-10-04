@@ -132,13 +132,10 @@ fn parses_xcode_list_sections_and_test_summary() {
         9,
         "Executed 2 tests, with 1 failure (0 unexpected) in 0.2 seconds",
     ));
-    assert_eq!(digest.xcode().test_summary().passed(), 1);
-    assert_eq!(digest.xcode().test_summary().failed(), 1);
-    assert_eq!(digest.xcode().test_failures().len(), 1);
-    assert_eq!(
-        digest.xcode().test_failures()[0].reason(),
-        Some("assertion failed")
-    );
+    assert_eq!(digest.test_summary().passed(), 1);
+    assert_eq!(digest.test_summary().failed(), 1);
+    assert_eq!(digest.test_failures().len(), 1);
+    assert_eq!(digest.test_failures()[0].reason(), Some("assertion failed"));
 }
 
 #[test]
@@ -149,17 +146,17 @@ fn retains_aggregate_xcode_counts_when_case_lines_are_absent() {
         0,
         "Executed 0 tests, with 0 failures (0 unexpected) in 0.0 seconds",
     ));
-    assert!(digest.xcode().test_summary().has_tests());
-    assert_eq!(digest.xcode().test_summary().passed(), 0);
-    assert_eq!(digest.xcode().test_summary().failed(), 0);
+    assert!(digest.test_summary().has_tests());
+    assert_eq!(digest.test_summary().passed(), 0);
+    assert_eq!(digest.test_summary().failed(), 0);
 
     digest.ingest(&OutputLine::new(
         Stream::Stdout,
         1,
         "Executed 4 tests, with 1 failure (0 unexpected) in 0.2 seconds (1 skipped)",
     ));
-    assert_eq!(digest.xcode().test_summary().executed(), 4);
-    assert_eq!(digest.xcode().test_summary().passed(), 3);
-    assert_eq!(digest.xcode().test_summary().failed(), 1);
-    assert_eq!(digest.xcode().test_summary().skipped(), 1);
+    assert_eq!(digest.test_summary().executed(), 4);
+    assert_eq!(digest.test_summary().passed(), 3);
+    assert_eq!(digest.test_summary().failed(), 1);
+    assert_eq!(digest.test_summary().skipped(), 1);
 }

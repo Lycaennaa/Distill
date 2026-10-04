@@ -41,7 +41,7 @@ fn emit_execution(
     }
 
     let final_status = execution.report().final_status();
-    let has_test_failures = execution.digest().xcode().test_summary().failed() > 0;
+    let has_test_failures = !execution.digest().test_failures().is_empty();
     if !final_status.is_success() && !execution.digest().has_diagnostics() && !has_test_failures {
         emit(RecordKind::Fallback, "no recognized diagnostics", policy);
         for line in execution.digest().fallback_lines() {
@@ -115,7 +115,7 @@ pub fn result_payload(label: &str, execution: &Execution) -> String {
 }
 
 fn emit_test_records(execution: &Execution, policy: RedactionPolicy) {
-    let summary = execution.digest().xcode().test_summary();
+    let summary = execution.digest().test_summary();
     if !summary.has_tests() {
         return;
     }
@@ -129,7 +129,7 @@ fn emit_test_records(execution: &Execution, policy: RedactionPolicy) {
         ),
         policy,
     );
-    for failure in execution.digest().xcode().test_failures() {
+    for failure in execution.digest().test_failures() {
         let source = failure.source().unwrap_or("<unknown>");
         let line = failure
             .line()

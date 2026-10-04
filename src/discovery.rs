@@ -115,9 +115,11 @@ pub(crate) fn discover_with_context(
         (Tool::Swift, action @ (Action::Build | Action::Test)) => {
             discover_swift(invocation, action, &start, context)
         }
-        (Tool::Cargo, action @ (Action::Build | Action::Clippy)) => {
-            discover_cargo(invocation, action, &start, context)
-        }
+        (
+            Tool::Cargo,
+            action
+            @ (Action::Build | Action::Test | Action::Fmt | Action::Package | Action::Clippy),
+        ) => discover_cargo(invocation, action, &start, context),
         _ => Err(DiscoveryError::Missing {
             tool: invocation.tool(),
             action: invocation.action(),

@@ -70,6 +70,9 @@ enum SwiftCommand {
 #[derive(Debug, Clone, Subcommand)]
 enum CargoCommand {
     Build(ActionArgs),
+    Test(ActionArgs),
+    Fmt(ActionArgs),
+    Package(ActionArgs),
     Clippy(ActionArgs),
 }
 
@@ -152,6 +155,8 @@ pub enum Action {
     List,
     Lint,
     Clippy,
+    Fmt,
+    Package,
 }
 
 impl std::fmt::Display for Action {
@@ -162,6 +167,8 @@ impl std::fmt::Display for Action {
             Self::List => "list",
             Self::Lint => "lint",
             Self::Clippy => "clippy",
+            Self::Fmt => "fmt",
+            Self::Package => "package",
         })
     }
 }
@@ -257,6 +264,9 @@ where
         },
         ToolCommand::Cargo(command) => match command {
             CargoCommand::Build(args) => (Tool::Cargo, Action::Build, args.forwarded),
+            CargoCommand::Test(args) => (Tool::Cargo, Action::Test, args.forwarded),
+            CargoCommand::Fmt(args) => (Tool::Cargo, Action::Fmt, args.forwarded),
+            CargoCommand::Package(args) => (Tool::Cargo, Action::Package, args.forwarded),
             CargoCommand::Clippy(args) => (Tool::Cargo, Action::Clippy, args.forwarded),
         },
     };
@@ -326,6 +336,9 @@ mod tests {
             ["swift", "test"].as_slice(),
             ["swift", "lint"].as_slice(),
             ["cargo", "build"].as_slice(),
+            ["cargo", "test"].as_slice(),
+            ["cargo", "fmt"].as_slice(),
+            ["cargo", "package"].as_slice(),
             ["cargo", "clippy"].as_slice(),
         ] {
             assert!(parse_args(args).is_ok(), "args: {args:?}");
@@ -336,7 +349,7 @@ mod tests {
     fn rejects_unknown_tools_and_actions() {
         assert!(parse_args(&["node", "build"]).is_err());
         assert!(parse_args(&["xcode", "deploy"]).is_err());
-        assert!(parse_args(&["cargo", "test"]).is_err());
+        assert!(parse_args(&["cargo", "deploy"]).is_err());
     }
 
     #[test]
