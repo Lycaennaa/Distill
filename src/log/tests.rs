@@ -4,7 +4,7 @@ use std::time::Duration;
 use super::*;
 
 fn destination(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("distill-phase3-{name}-{}.log", std::process::id()))
+    std::env::temp_dir().join(format!("distill-log-{name}-{}.log", std::process::id()))
 }
 fn remove_lock_file(path: &Path) {
     let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
