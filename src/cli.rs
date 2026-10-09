@@ -84,6 +84,7 @@ enum CargoCommand {
     Fmt(CargoActionArgs),
     Package(CargoActionArgs),
     Clippy(CargoActionArgs),
+    Xtask(CargoActionArgs),
 }
 
 /// Non-action wrapper settings retained by the validated invocation.
@@ -158,6 +159,7 @@ impl std::fmt::Display for Tool {
 }
 
 /// Strict action set accepted by each tool.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
     Build,
@@ -167,6 +169,7 @@ pub enum Action {
     Clippy,
     Fmt,
     Package,
+    Xtask,
 }
 
 impl std::fmt::Display for Action {
@@ -179,6 +182,7 @@ impl std::fmt::Display for Action {
             Self::Clippy => "clippy",
             Self::Fmt => "fmt",
             Self::Package => "package",
+            Self::Xtask => "xtask",
         })
     }
 }
@@ -273,38 +277,17 @@ where
             SwiftCommand::Test(args) => (Tool::Swift, Action::Test, args.forwarded, false),
             SwiftCommand::Lint(args) => (Tool::Swift, Action::Lint, args.forwarded, false),
         },
-        ToolCommand::Cargo(command) => match command {
-            CargoCommand::Build(args) => (
-                Tool::Cargo,
-                Action::Build,
-                args.action.forwarded,
-                args.nightly,
-            ),
-            CargoCommand::Test(args) => (
-                Tool::Cargo,
-                Action::Test,
-                args.action.forwarded,
-                args.nightly,
-            ),
-            CargoCommand::Fmt(args) => (
-                Tool::Cargo,
-                Action::Fmt,
-                args.action.forwarded,
-                args.nightly,
-            ),
-            CargoCommand::Package(args) => (
-                Tool::Cargo,
-                Action::Package,
-                args.action.forwarded,
-                args.nightly,
-            ),
-            CargoCommand::Clippy(args) => (
-                Tool::Cargo,
-                Action::Clippy,
-                args.action.forwarded,
-                args.nightly,
-            ),
-        },
+        ToolCommand::Cargo(command) => {
+            let (action, args) = match command {
+                CargoCommand::Build(args) => (Action::Build, args),
+                CargoCommand::Test(args) => (Action::Test, args),
+                CargoCommand::Fmt(args) => (Action::Fmt, args),
+                CargoCommand::Package(args) => (Action::Package, args),
+                CargoCommand::Clippy(args) => (Action::Clippy, args),
+                CargoCommand::Xtask(args) => (Action::Xtask, args),
+            };
+            (Tool::Cargo, action, args.action.forwarded, args.nightly)
+        }
     };
 
     let post_action = normalize_post_action(tool, action, &cli.options)
@@ -377,9 +360,22 @@ mod tests {
             ["cargo", "fmt"].as_slice(),
             ["cargo", "package"].as_slice(),
             ["cargo", "clippy"].as_slice(),
+            ["cargo", "xtask"].as_slice(),
         ] {
             assert!(parse_args(args).is_ok(), "args: {args:?}");
         }
+    }
+
+    #[test]
+    fn cargo_xtask_forwards_task_arguments_and_nightly_selection() {
+        let invocation =
+            parse_args(&["cargo", "xtask", "--nightly", "ci", "--all"]).expect("valid invocation");
+
+        assert_eq!(
+            invocation.forwarded_args,
+            ["ci", "--all"].map(OsString::from)
+        );
+        assert!(invocation.nightly);
     }
 
     #[test]

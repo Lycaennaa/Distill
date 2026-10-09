@@ -117,8 +117,12 @@ pub(crate) fn discover_with_context(
         }
         (
             Tool::Cargo,
-            action
-            @ (Action::Build | Action::Test | Action::Fmt | Action::Package | Action::Clippy),
+            action @ (Action::Build
+            | Action::Test
+            | Action::Fmt
+            | Action::Package
+            | Action::Clippy
+            | Action::Xtask),
         ) => discover_cargo(invocation, action, &start, context),
         _ => Err(DiscoveryError::Missing {
             tool: invocation.tool(),
@@ -230,7 +234,10 @@ fn discover_cargo(
     start: &Path,
     context: DiscoveryContext<'_>,
 ) -> Result<Discovery, DiscoveryError> {
-    let explicit = collect_path_options(invocation.forwarded_args(), &["--manifest-path"]);
+    let explicit = match action {
+        Action::Xtask => Vec::new(),
+        _ => collect_path_options(invocation.forwarded_args(), &["--manifest-path"]),
+    };
     if explicit.len() > 1 {
         return Err(DiscoveryError::ConflictingExplicit {
             tool: Tool::Cargo,

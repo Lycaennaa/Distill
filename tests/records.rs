@@ -85,6 +85,10 @@ package)
   printf 'toolchain: %s\n' "$RUSTUP_TOOLCHAIN" >&2
   exit 1
   ;;
+xtask)
+  printf 'received args: %s\n' "$*" >&2
+  exit 1
+  ;;
 esac
 exit 2
 "#,
@@ -180,6 +184,30 @@ fn cargo_package_forwards_common_flags() -> TestResult {
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("received args: package --quiet --locked --offline"));
+    assert!(stdout.contains("class=compile owner=child"));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn cargo_xtask_forwards_task_arguments_without_adding_flags() -> TestResult {
+    let (root, bin) = fake_cargo_fixture("cargo-xtask")?;
+    let output = run_cargo(
+        &root,
+        &bin,
+        &[
+            "cargo",
+            "xtask",
+            "ci",
+            "--dry-run",
+            "--manifest-path",
+            "task-value",
+        ],
+    )?;
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("received args: xtask ci --dry-run --manifest-path task-value"));
     assert!(stdout.contains("class=compile owner=child"));
     fs::remove_dir_all(root)?;
     Ok(())

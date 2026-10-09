@@ -147,6 +147,7 @@ const fn command_mapping(invocation: &Invocation) -> (&'static str, &'static str
         (Tool::Cargo, Action::Fmt) => ("cargo", "fmt", StatusClass::Lint),
         (Tool::Cargo, Action::Package) => ("cargo", "package", StatusClass::Compile),
         (Tool::Cargo, Action::Clippy) => ("cargo", "clippy", StatusClass::Lint),
+        (Tool::Cargo, Action::Xtask) => ("cargo", "xtask", StatusClass::Compile),
         _ => ("", "", StatusClass::Compile),
     }
 }
@@ -263,6 +264,24 @@ mod tests {
             ]
         );
         assert_eq!(spec.status_class(), StatusClass::Lint);
+    }
+
+    #[test]
+    fn cargo_xtask_forwards_task_arguments_without_injected_flags() {
+        let invocation = invocation(&["cargo", "xtask", "ci", "--all"]);
+        let spec = command_for(&invocation).expect("command should build");
+
+        assert_eq!(spec.program(), "cargo");
+        assert_eq!(
+            spec.arguments(),
+            &[
+                OsString::from("xtask"),
+                OsString::from("ci"),
+                OsString::from("--all")
+            ]
+        );
+        assert_eq!(spec.injected_options(), Vec::<OsString>::new());
+        assert_eq!(spec.status_class(), StatusClass::Compile);
     }
 
     #[test]
