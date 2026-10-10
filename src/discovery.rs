@@ -122,8 +122,9 @@ pub(crate) fn discover_with_context(
             | Action::Fmt
             | Action::Package
             | Action::Clippy
+            | Action::Install
             | Action::Xtask),
-        ) => discover_cargo(invocation, action, &start, context),
+        ) => crate::cargo_discovery::discover_cargo(invocation, action, &start, context),
         _ => Err(DiscoveryError::Missing {
             tool: invocation.tool(),
             action: invocation.action(),
@@ -228,53 +229,6 @@ fn discover_swift_package(
     ))
 }
 
-fn discover_cargo(
-    invocation: &Invocation,
-    action: Action,
-    start: &Path,
-    context: DiscoveryContext<'_>,
-) -> Result<Discovery, DiscoveryError> {
-    let explicit = match action {
-        Action::Xtask => Vec::new(),
-        _ => collect_path_options(invocation.forwarded_args(), &["--manifest-path"]),
-    };
-    if explicit.len() > 1 {
-        return Err(DiscoveryError::ConflictingExplicit {
-            tool: Tool::Cargo,
-            action,
-            options: explicit.into_iter().map(|value| value.option).collect(),
-        });
-    }
-    if let Some(value) = explicit.first() {
-        let marker =
-            validate_manifest_path(invocation, action, start, value, "Cargo.toml", context)?;
-        let root = marker
-            .parent()
-            .map_or_else(|| marker.clone(), Path::to_path_buf);
-        return Ok(Discovery::new(
-            root,
-            Some(marker),
-            RootKind::CargoPackage,
-            true,
-        ));
-    }
-    let marker = choose_one(
-        Tool::Cargo,
-        action,
-        start,
-        marker_candidates(start, "Cargo.toml", context)?,
-    )?;
-    let root = marker
-        .parent()
-        .map_or_else(|| marker.clone(), Path::to_path_buf);
-    Ok(Discovery::new(
-        root,
-        Some(marker),
-        RootKind::CargoPackage,
-        false,
-    ))
-}
-
 fn validate_package_path(
     invocation: &Invocation,
     action: Action,
@@ -319,7 +273,7 @@ fn validate_package_path(
     ))
 }
 
-fn validate_manifest_path(
+pub(super) fn validate_manifest_path(
     invocation: &Invocation,
     action: Action,
     start: &Path,
@@ -369,7 +323,7 @@ fn canonical_parent(
     check_deadline(context, &canonical)?;
     Ok(canonical)
 }
-fn invalid_explicit(
+pub(super) fn invalid_explicit(
     tool: Tool,
     action: Action,
     value: &ExplicitPath,
@@ -384,7 +338,7 @@ fn invalid_explicit(
     }
 }
 
-fn marker_candidates(
+pub(super) fn marker_candidates(
     start: &Path,
     filename: &str,
     context: DiscoveryContext<'_>,

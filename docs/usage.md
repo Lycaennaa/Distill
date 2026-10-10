@@ -5,14 +5,16 @@
 ```text
 distill xcode build|test|list
 distill swift build|test|lint
-distill cargo build|test|fmt|package|clippy|xtask
+distill cargo build|test|fmt|package|install|clippy|xtask
 ```
 
 Pass wrapped-tool arguments directly after the action. Use `--` when an argument conflicts with a Distill option and must be forwarded instead. Distill launches tools directly, without a shell.
 
-Discovery searches the current directory (`--cwd`) and its ancestors for an Xcode project/workspace, Swift package, or Cargo manifest. Missing or ambiguous roots fail. SwiftLint needs no package. Explicit `-workspace`, `-project`, `--package-path`, and `--manifest-path` values are validated and disable automatic discovery.
+Xcode, Swift, and Cargo root-based actions search the selected directory (`--cwd`) and its ancestors for a project or package manifest; missing or ambiguous roots fail. SwiftLint and Cargo install without `--path` use the selected working directory. Explicit `-workspace`, `-project`, `--package-path`, and `--manifest-path` values are validated and disable automatic discovery.
 
-Cargo build/test/Clippy add `--quiet` unless verbosity is requested and `--message-format=json-diagnostic-rendered-ansi` unless another message format is supplied. Cargo package adds only `--quiet` unless verbosity is requested; Cargo fmt adds no flags. Pass Distill's `--nightly` flag to set `RUSTUP_TOOLCHAIN=nightly-aarch64-apple-darwin` for any Cargo action.
+Cargo build/test/Clippy/install add `--quiet` unless verbosity is requested and `--message-format=json-diagnostic-rendered-ansi` unless another message format is supplied. Cargo package adds only `--quiet` unless verbosity is requested; Cargo fmt and xtask add no flags. Place Distill's `--nightly` before Cargo arguments and any `--` separator to select the host's nightly toolchain for any Cargo action.
+
+Cargo install supports registry/Git installs from the selected working directory. With `--path`, Distill validates and selects the local Cargo package directory before launching Cargo.
 
 Cargo xtask forwards its task arguments unchanged and adds no automatic flags. It requires a configured Cargo `xtask` alias or an installed `cargo-xtask` executable; see [cargo-xtask](https://github.com/matklad/cargo-xtask) for the alias pattern.
 
@@ -25,6 +27,7 @@ distill cargo fmt --check
 distill cargo test --all-targets
 distill cargo test --locked --offline --all-targets
 distill cargo package --locked --allow-dirty
+distill cargo install --path . --locked
 distill cargo test --nightly --all-targets
 distill cargo xtask ci
 distill --save-log ./build.log xcode build --scheme Demo

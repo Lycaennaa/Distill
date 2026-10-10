@@ -6,7 +6,9 @@ use std::error::Error;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use distill::{CommandBuildError, DiscoveryError, RootKind, command_for, parse};
@@ -32,6 +34,13 @@ fn invocation(cwd: &Path, args: &[&str]) -> TestResult<distill::Invocation> {
     ];
     values.extend(args.iter().map(OsString::from));
     parse(values).map_err(|error| io::Error::other(error.to_string()).into())
+}
+
+fn run_distill(arguments: &[&str], path: &Path) -> TestResult<Output> {
+    Ok(Command::new(env!("CARGO_BIN_EXE_distill"))
+        .args(arguments)
+        .env("PATH", path)
+        .output()?)
 }
 
 #[test]
@@ -75,6 +84,164 @@ fn explicit_cargo_manifest_selects_its_root() -> TestResult {
         Some(&root.join("Cargo.toml").into_os_string())
     );
     drop(fs::remove_dir_all(root));
+    Ok(())
+}
+
+#[test]
+fn cargo_install_resolves_local_path_and_propagates_child_status() -> TestResult {
+    let root = fixture("cargo-install")?;
+    let package = root.join("local-package");
+    fs::create_dir(&package)?;
+    fs::write(
+        package.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )?;
+    let bin = root.join("bin");
+    fs::create_dir(&bin)?;
+    let fake_cargo = bin.join("cargo");
+    fs::write(
+        &fake_cargo,
+        r#"#!/bin/sh
+case "$*" in
+  *--fail-install*)
+    printf '%s\n' '{"reason":"compiler-message","message":{"message":"missing function","level":"error","code":{"code":"E0599"},"spans":[{"file_name":"src/lib.rs","line_start":7,"column_start":3,"is_primary":true}],"children":[]}}'
+    exit 7
+    ;;
+esac
+"#,
+    )?;
+    let mut permissions = fs::metadata(&fake_cargo)?.permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&fake_cargo, permissions)?;
+    let cwd = root.to_str().ok_or("fixture path is not UTF-8")?;
+
+    let spec = command_for(&invocation(
+        &root,
+        &[
+            "cargo",
+            "install",
+            "--",
+            "--path",
+            "local-package",
+            "--locked",
+        ],
+    )?)?;
+    assert_eq!(spec.cwd(), Some(package.as_path()));
+    assert_eq!(spec.arguments().len(), 6);
+    assert_eq!(
+        spec.arguments(),
+        &[
+            OsString::from("install"),
+            OsString::from("--quiet"),
+            OsString::from("--message-format=json-diagnostic-rendered-ansi"),
+            OsString::from("--path"),
+            package.as_os_str().to_os_string(),
+            OsString::from("--locked")
+        ]
+    );
+
+    let output = run_distill(
+        &[
+            "--cwd",
+            cwd,
+            "cargo",
+            "install",
+            "--",
+            "--path",
+            "local-package",
+            "--locked",
+        ],
+        &bin,
+    )?;
+    assert!(output.status.success());
+
+    let failed = run_distill(
+        &[
+            "--cwd",
+            cwd,
+            "cargo",
+            "install",
+            "--",
+            "--path",
+            "local-package",
+            "--locked",
+            "--fail-install",
+        ],
+        &bin,
+    )?;
+    assert_eq!(failed.status.code(), Some(7));
+    let stdout = String::from_utf8(failed.stdout)?;
+    assert!(stdout.contains("class=compile owner=child"));
+    assert!(stdout.contains("E0599"));
+    assert!(stdout.contains("missing function"));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn cargo_install_without_local_path_needs_no_manifest() -> TestResult {
+    let root = fixture("cargo-install-registry")?;
+    let spec = command_for(&invocation(&root, &["cargo", "install", "ripgrep"])?)?;
+
+    assert_eq!(spec.cwd(), Some(root.as_path()));
+    assert_eq!(spec.arguments().len(), 4);
+    assert_eq!(
+        spec.arguments(),
+        &[
+            OsString::from("install"),
+            OsString::from("--quiet"),
+            OsString::from("--message-format=json-diagnostic-rendered-ansi"),
+            OsString::from("ripgrep")
+        ]
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn cargo_install_rejects_directory_without_manifest() -> TestResult {
+    let root = fixture("cargo-install-invalid-path")?;
+    let empty = root.join("empty");
+    fs::create_dir(&empty)?;
+    let error = match command_for(&invocation(
+        &root,
+        &["cargo", "install", "--", "--path", "empty"],
+    )?) {
+        Ok(_spec) => return Err(io::Error::other("invalid Cargo install path should fail").into()),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        CommandBuildError::Discovery(DiscoveryError::InvalidExplicit {
+            tool: distill::Tool::Cargo,
+            action: distill::Action::Install,
+            ..
+        })
+    ));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn cargo_install_rejects_empty_local_path() -> TestResult {
+    let root = fixture("cargo-install-empty-path")?;
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+    )?;
+    let error = match command_for(&invocation(&root, &["cargo", "install", "--", "--path="])?) {
+        Ok(_spec) => return Err(io::Error::other("empty Cargo install path should fail").into()),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        CommandBuildError::Discovery(DiscoveryError::InvalidExplicit {
+            tool: distill::Tool::Cargo,
+            action: distill::Action::Install,
+            ..
+        })
+    ));
+    fs::remove_dir_all(root)?;
     Ok(())
 }
 

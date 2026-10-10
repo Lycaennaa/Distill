@@ -31,12 +31,13 @@ Building from source requires Rust 1.94+.
 ```text
 distill xcode build|test|list
 distill swift build|test|lint
-distill cargo build|test|fmt|package|clippy|xtask
+distill cargo build|test|fmt|package|install|clippy|xtask
 ```
 
 ```sh
 distill swift build
 distill cargo test --all-targets
+distill cargo install --path . --locked
 distill xcode build --scheme Demo
 ```
 

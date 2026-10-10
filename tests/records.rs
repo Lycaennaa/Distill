@@ -219,7 +219,7 @@ fn cargo_nightly_selects_toolchain_and_is_visible_in_plan() -> TestResult {
     let plan = run_cargo(&root, &bin, &["--plan", "cargo", "build", "--nightly"])?;
     let plan_stdout = String::from_utf8(plan.stdout)?;
     assert!(plan_stdout.contains(
-        "injected=--quiet,--message-format=json-diagnostic-rendered-ansi,RUSTUP_TOOLCHAIN=nightly-aarch64-apple-darwin"
+        "injected=--quiet,--message-format=json-diagnostic-rendered-ansi,RUSTUP_TOOLCHAIN=nightly"
     ));
 
     let output = run_cargo_with_parent_toolchain(
@@ -230,7 +230,7 @@ fn cargo_nightly_selects_toolchain_and_is_visible_in_plan() -> TestResult {
     )?;
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("toolchain: nightly-aarch64-apple-darwin"));
+    assert!(stdout.contains("toolchain: nightly"));
     assert!(stdout.contains("received args: package --quiet --locked"));
     fs::remove_dir_all(root)?;
     Ok(())

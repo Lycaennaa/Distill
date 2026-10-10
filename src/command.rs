@@ -104,7 +104,7 @@ fn command_for_with_context(
     spec = spec.args(forwarded);
 
     if invocation.nightly {
-        spec = spec.env("RUSTUP_TOOLCHAIN", "nightly-aarch64-apple-darwin");
+        spec = spec.env("RUSTUP_TOOLCHAIN", "nightly");
     }
     Ok(spec)
 }
@@ -117,6 +117,7 @@ fn normalized_forwarded_args(invocation: &Invocation, discovery: &Discovery) -> 
     let names = match invocation.tool() {
         Tool::Xcode => &["-workspace", "-project"][..],
         Tool::Swift => &["--package-path", "--manifest-path"][..],
+        Tool::Cargo if invocation.action() == Action::Install => &["--path"][..],
         Tool::Cargo => &["--manifest-path"][..],
     };
     let explicit = collect_path_options(arguments, names);
@@ -126,7 +127,7 @@ fn normalized_forwarded_args(invocation: &Invocation, discovery: &Discovery) -> 
     let Some(marker) = discovery.marker() else {
         return arguments.to_vec();
     };
-    let path = if invocation.tool() == Tool::Swift && value.option == "--package-path" {
+    let path = if matches!(value.option.as_str(), "--package-path" | "--path") {
         discovery.root()
     } else {
         marker
@@ -146,6 +147,7 @@ const fn command_mapping(invocation: &Invocation) -> (&'static str, &'static str
         (Tool::Cargo, Action::Test) => ("cargo", "test", StatusClass::Test),
         (Tool::Cargo, Action::Fmt) => ("cargo", "fmt", StatusClass::Lint),
         (Tool::Cargo, Action::Package) => ("cargo", "package", StatusClass::Compile),
+        (Tool::Cargo, Action::Install) => ("cargo", "install", StatusClass::Compile),
         (Tool::Cargo, Action::Clippy) => ("cargo", "clippy", StatusClass::Lint),
         (Tool::Cargo, Action::Xtask) => ("cargo", "xtask", StatusClass::Compile),
         _ => ("", "", StatusClass::Compile),
@@ -160,7 +162,10 @@ fn automatic_flags(tool: Tool, action: Action, forwarded: &[OsString]) -> Vec<Os
         (Tool::Swift, Action::Build | Action::Test) if !has_user_verbosity(forwarded) => {
             vec![OsString::from("--quiet")]
         }
-        (Tool::Cargo, Action::Build | Action::Test | Action::Package | Action::Clippy) => {
+        (
+            Tool::Cargo,
+            Action::Build | Action::Test | Action::Package | Action::Clippy | Action::Install,
+        ) => {
             let mut flags = Vec::new();
             if !has_user_verbosity(forwarded) {
                 flags.push(OsString::from("--quiet"));
@@ -317,6 +322,73 @@ mod tests {
     }
 
     #[test]
+    fn cargo_install_adds_diagnostic_flags_and_forwards_path() {
+        let root =
+            PathBuf::from("target").join(format!("distill-command-install-{}", std::process::id()));
+        drop(fs::remove_dir_all(&root));
+        fs::create_dir_all(&root).expect("create Cargo fixture");
+        fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write Cargo manifest");
+        let root = fs::canonicalize(root).expect("canonicalize Cargo fixture");
+        let root_argument = root.to_string_lossy().into_owned();
+        let cargo_invocation = invocation(&[
+            "--cwd",
+            &root_argument,
+            "cargo",
+            "install",
+            "--",
+            "--path",
+            ".",
+            "--locked",
+        ]);
+        let spec = command_for(&cargo_invocation).expect("install command should build");
+
+        assert_eq!(spec.cwd(), Some(root.as_path()));
+        assert_eq!(
+            spec.arguments(),
+            &[
+                OsString::from("install"),
+                OsString::from("--quiet"),
+                OsString::from("--message-format=json-diagnostic-rendered-ansi"),
+                OsString::from("--path"),
+                root.as_os_str().to_os_string(),
+                OsString::from("--locked")
+            ]
+        );
+        assert_eq!(
+            spec.injected_options(),
+            &[
+                OsString::from("--quiet"),
+                OsString::from("--message-format=json-diagnostic-rendered-ansi")
+            ]
+        );
+        assert_eq!(spec.status_class(), StatusClass::Compile);
+        let custom_invocation = invocation(&[
+            "--cwd",
+            &root_argument,
+            "cargo",
+            "install",
+            "--",
+            "--path",
+            ".",
+            "--message-format=json",
+        ]);
+        let custom_spec = command_for(&custom_invocation).expect("custom message format");
+        assert!(
+            custom_spec
+                .arguments()
+                .contains(&OsString::from("--message-format=json"))
+        );
+        assert!(!custom_spec.arguments().contains(&OsString::from(
+            "--message-format=json-diagnostic-rendered-ansi"
+        )));
+        fs::remove_dir_all(root).expect("remove Cargo fixture");
+    }
+
+    #[test]
     fn cargo_nightly_sets_toolchain_environment_without_forwarding_flag() {
         let invocation = invocation(&["cargo", "build", "--nightly"]);
         let spec = command_for(&invocation).expect("command should build");
@@ -325,7 +397,7 @@ mod tests {
             spec.environment(),
             &[(
                 OsString::from("RUSTUP_TOOLCHAIN"),
-                OsString::from("nightly-aarch64-apple-darwin")
+                OsString::from("nightly")
             )]
         );
         assert!(!spec.arguments().contains(&OsString::from("--nightly")));

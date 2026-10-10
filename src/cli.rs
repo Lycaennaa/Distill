@@ -35,7 +35,7 @@ struct ActionArgs {
 
 #[derive(Debug, Clone, Args)]
 struct CargoActionArgs {
-    /// Use the nightly-aarch64-apple-darwin Rust toolchain.
+    /// Use the host's nightly Rust toolchain.
     #[arg(long)]
     nightly: bool,
 
@@ -83,6 +83,7 @@ enum CargoCommand {
     Test(CargoActionArgs),
     Fmt(CargoActionArgs),
     Package(CargoActionArgs),
+    Install(CargoActionArgs),
     Clippy(CargoActionArgs),
     Xtask(CargoActionArgs),
 }
@@ -169,6 +170,7 @@ pub enum Action {
     Clippy,
     Fmt,
     Package,
+    Install,
     Xtask,
 }
 
@@ -182,6 +184,7 @@ impl std::fmt::Display for Action {
             Self::Clippy => "clippy",
             Self::Fmt => "fmt",
             Self::Package => "package",
+            Self::Install => "install",
             Self::Xtask => "xtask",
         })
     }
@@ -283,6 +286,7 @@ where
                 CargoCommand::Test(args) => (Action::Test, args),
                 CargoCommand::Fmt(args) => (Action::Fmt, args),
                 CargoCommand::Package(args) => (Action::Package, args),
+                CargoCommand::Install(args) => (Action::Install, args),
                 CargoCommand::Clippy(args) => (Action::Clippy, args),
                 CargoCommand::Xtask(args) => (Action::Xtask, args),
             };
@@ -359,6 +363,7 @@ mod tests {
             ["cargo", "test"].as_slice(),
             ["cargo", "fmt"].as_slice(),
             ["cargo", "package"].as_slice(),
+            ["cargo", "install"].as_slice(),
             ["cargo", "clippy"].as_slice(),
             ["cargo", "xtask"].as_slice(),
         ] {
@@ -383,6 +388,10 @@ mod tests {
         let invocation = parse_args(&["cargo", "build", "--nightly"]).expect("valid invocation");
 
         assert!(invocation.nightly);
+        let install = parse_args(&["cargo", "install", "--nightly", "--path", "."])
+            .expect("nightly before Cargo options is recognized");
+        assert!(install.nightly);
+        assert_eq!(install.forwarded_args, ["--path", "."].map(OsString::from));
         assert!(
             !parse_args(&["cargo", "build"])
                 .expect("valid invocation")

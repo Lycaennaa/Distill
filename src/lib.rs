@@ -15,6 +15,7 @@ pub mod redaction;
 pub mod status;
 pub(crate) mod tool_args;
 
+pub(crate) mod cargo_discovery;
 pub(crate) mod xcode_discovery;
 pub use artifact::{Artifact, ArtifactKind, ArtifactState};
 pub use cli::{
