@@ -1,4 +1,4 @@
-use std::process::Child;
+use super::child::ChildProcess;
 use std::time::{Duration, Instant};
 
 use crate::status::StatusClass;
@@ -62,12 +62,12 @@ pub(super) enum GroupSignal {
     Kill,
 }
 pub(super) fn begin_termination(
-    child: &mut Child,
+    child: &mut dyn ChildProcess,
     pid: u32,
     reason: StopReason,
 ) -> (Option<Instant>, Option<Instant>, bool, bool) {
     let cleanup_deadline = Instant::now().checked_add(CLEANUP_LIMIT);
-    match send_group_signal(pid, reason.signal()) {
+    match send_group_signal(child, pid, reason.signal()) {
         GroupSignalResult::Gone => (None, cleanup_deadline, true, false),
         GroupSignalResult::Sent => (
             Instant::now().checked_add(TERMINATION_GRACE),
@@ -87,8 +87,8 @@ pub(super) fn begin_termination(
     }
 }
 
-pub(super) fn force_child(child: &mut Child, pid: u32) -> GroupSignalResult {
-    let result = send_group_signal(pid, GroupSignal::Kill);
+pub(super) fn force_child(child: &mut dyn ChildProcess, pid: u32) -> GroupSignalResult {
+    let result = send_group_signal(child, pid, GroupSignal::Kill);
     if result == GroupSignalResult::Failed {
         drop(child.kill());
     }
@@ -96,7 +96,11 @@ pub(super) fn force_child(child: &mut Child, pid: u32) -> GroupSignalResult {
 }
 
 #[cfg(unix)]
-pub(super) fn send_group_signal(pid: u32, signal: GroupSignal) -> GroupSignalResult {
+pub(super) fn send_group_signal(
+    _child: &mut dyn ChildProcess,
+    pid: u32,
+    signal: GroupSignal,
+) -> GroupSignalResult {
     let Ok(pid) = i32::try_from(pid) else {
         return GroupSignalResult::Failed;
     };
@@ -111,8 +115,28 @@ pub(super) fn send_group_signal(pid: u32, signal: GroupSignal) -> GroupSignalRes
         Err(_error) => GroupSignalResult::Failed,
     }
 }
+#[cfg(windows)]
+pub(super) fn send_group_signal(
+    child: &mut dyn ChildProcess,
+    _pid: u32,
+    signal: GroupSignal,
+) -> GroupSignalResult {
+    let result = match signal {
+        GroupSignal::Kill => child.terminate_job(),
+        GroupSignal::Terminate | GroupSignal::Interrupt => child.send_break(),
+    };
+    match result {
+        Ok(true) => GroupSignalResult::Gone,
+        Ok(false) => GroupSignalResult::Sent,
+        Err(_error) => GroupSignalResult::Failed,
+    }
+}
 
-#[cfg(not(unix))]
-pub(super) fn send_group_signal(_pid: u32, _signal: GroupSignal) -> GroupSignalResult {
+#[cfg(not(any(unix, windows)))]
+pub(super) fn send_group_signal(
+    _child: &mut dyn ChildProcess,
+    _pid: u32,
+    _signal: GroupSignal,
+) -> GroupSignalResult {
     GroupSignalResult::Failed
 }

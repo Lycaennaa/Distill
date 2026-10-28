@@ -33,3 +33,8 @@ jobs:
           shopt -s nullglob
           archives=("$dist_dir"/distill-*.tar.gz)
           test "${#archives[@]}" -eq 2
+          windows_archives=("$dist_dir"/distill-*-x86_64-pc-windows-gnu.zip)
+          test "${#windows_archives[@]}" -eq 1
+          (cd "$dist_dir" && shasum -a 256 --check SHA256SUMS)
+          unzip -t "${windows_archives[0]}"
+          test "$(unzip -Z1 "${windows_archives[0]}")" = "distill.exe"

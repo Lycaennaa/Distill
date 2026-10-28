@@ -22,7 +22,7 @@ pub(super) fn sanitize_file(
     policy: RedactionPolicy,
     deadline: Option<Instant>,
     cancellation: &CancellationToken,
-) -> Result<(u64, [u8; 32]), PublishFailure> {
+) -> Result<(u64, [u8; 32], File), PublishFailure> {
     let mut input = input_file;
     let mut output = BufWriter::new(output_file);
     let mut hasher = Sha256::new();
@@ -79,7 +79,10 @@ pub(super) fn sanitize_file(
     let digest = hasher.finalize();
     let mut checksum = [0_u8; 32];
     checksum.copy_from_slice(&digest);
-    Ok((bytes_written, checksum))
+    let output_file = output
+        .into_inner()
+        .map_err(|error| PublishFailure::Io(error.into_error().to_string()))?;
+    Ok((bytes_written, checksum, output_file))
 }
 
 fn write_sanitized(

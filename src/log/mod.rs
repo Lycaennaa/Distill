@@ -1,11 +1,20 @@
 mod sanitize;
+#[cfg(unix)]
+#[path = "storage.rs"]
+mod storage;
+#[cfg(windows)]
+#[path = "storage_windows.rs"]
 mod storage;
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, windows))]
+mod tests_windows;
 
 use std::ffi::OsStr;
 use std::fmt;
-use std::fs::{self, File};
+#[cfg(unix)]
+use std::fs;
+use std::fs::File;
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -118,7 +127,10 @@ pub struct LogPublisher {
     destination: PathBuf,
     destination_name: String,
     workspace: TempWorkspace,
+    #[cfg(unix)]
     lock: Option<nix::fcntl::Flock<File>>,
+    #[cfg(windows)]
+    lock: Option<storage::ReservationLock>,
     raw: Option<BufWriter<File>>,
     capture_failed: bool,
     finished: bool,
@@ -142,16 +154,28 @@ impl LogPublisher {
             return Err(LogError::new("log path must name a file"));
         };
         let destination_name = name.to_owned();
+        #[cfg(unix)]
         let parent = fs::canonicalize(&parent)
             .map_err(|error| LogError::new(format!("cannot resolve log directory: {error}")))?;
+        #[cfg(windows)]
+        let parent_directory = open_directory(&parent)?;
+        #[cfg(windows)]
+        let parent = parent_directory.path().to_path_buf();
         let destination = parent.join(&destination_name);
 
+        #[cfg(unix)]
         let parent_directory = open_directory(&parent)?;
         validate_parent_ancestry(&parent, &parent_directory)?;
         let lock = reserve_lock(&parent_directory, &destination_name)?;
         cleanup_incomplete(&parent, &parent_directory, &destination_name)?;
+        #[cfg(unix)]
         ensure_absent(&destination)?;
+        #[cfg(windows)]
+        ensure_absent(&parent_directory, &destination_name)?;
+        #[cfg(unix)]
         let workspace = TempWorkspace::create(&parent_directory, &destination_name)?;
+        #[cfg(windows)]
+        let mut workspace = TempWorkspace::create(parent_directory, &destination_name)?;
         let raw_file = workspace.create_capture()?;
 
         Ok(Self {
@@ -224,7 +248,7 @@ impl LogPublisher {
             Err(error) => return self.failed(StatusClass::LogWrite, &error.to_string(), None),
         };
 
-        let (bytes, checksum) =
+        let (bytes, checksum, sanitized_file) =
             match sanitize_file(raw_file, sanitized_file, policy, deadline, cancellation) {
                 Ok(result) => result,
                 Err(PublishFailure::Stopped(class)) => {
@@ -235,6 +259,7 @@ impl LogPublisher {
                 }
             };
         if let Some(class) = stop_class(deadline, cancellation) {
+            drop(sanitized_file);
             return self.failed(class, stop_message(class), None);
         }
 
@@ -244,7 +269,11 @@ impl LogPublisher {
             checksum: checksum_text(checksum),
             policy,
         };
-        if let Err(error) = self.workspace.publish(&self.destination_name) {
+        let commit = self
+            .workspace
+            .publish(&sanitized_file, &self.destination_name);
+        drop(sanitized_file);
+        if let Err(error) = commit {
             return self.failed(
                 StatusClass::LogWrite,
                 &format!("cannot commit log: {error}"),
@@ -331,6 +360,7 @@ impl LogPublisher {
     }
 
     fn cleanup(&mut self) -> Option<String> {
+        drop(self.raw.take());
         let cleanup_error = self.workspace.cleanup();
         drop(self.lock.take());
         cleanup_error

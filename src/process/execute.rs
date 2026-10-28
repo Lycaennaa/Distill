@@ -1,6 +1,10 @@
-use std::process::{Command, ExitStatus, Stdio};
+use std::path::Path;
+use std::process::ExitStatus;
+#[cfg(not(windows))]
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use super::child::ChildProcess;
 use super::launch::resolve_program;
 use super::model::{
     CancellationToken, CaptureSinks, CommandSpec, Execution, ProcessError, RawLogSink,
@@ -183,22 +187,8 @@ fn execute_inner(
         );
     }
 
-    let mut command = Command::new(program);
-    command
-        .args(spec.arguments())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for (key, value) in spec.environment() {
-        command.env(key, value);
-    }
-    if let Some(cwd) = spec.cwd() {
-        command.current_dir(cwd);
-    }
-    #[cfg(unix)]
-    command.process_group(0);
-
-    let child = match command.spawn() {
+    let child_result = spawn_child(spec, &program);
+    let child = match child_result {
         Ok(child) => child,
         Err(_error) => {
             return wrapper_execution(
@@ -237,6 +227,36 @@ fn execute_inner(
             CaptureCompleteness::Complete
         ),
     ))
+}
+
+fn spawn_child(spec: &CommandSpec, program: &Path) -> std::io::Result<impl ChildProcess> {
+    #[cfg(windows)]
+    {
+        super::windows::WindowsChild::spawn(
+            program.as_os_str(),
+            spec.arguments(),
+            spec.environment(),
+            spec.cwd(),
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let mut command = Command::new(program);
+        command
+            .args(spec.arguments())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in spec.environment() {
+            command.env(key, value);
+        }
+        if let Some(cwd) = spec.cwd() {
+            command.current_dir(cwd);
+        }
+        #[cfg(unix)]
+        command.process_group(0);
+        command.spawn()
+    }
 }
 
 fn wrapper_execution(

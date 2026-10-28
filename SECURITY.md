@@ -4,7 +4,7 @@
 
 Please report suspected vulnerabilities privately through GitHub's Security Advisories feature for this repository (Security → Advisories → Report a vulnerability), if enabled. Do not post exploit details in a public issue. If private reporting is unavailable, open an issue asking the maintainers for a private contact without including sensitive details.
 
-Include the affected Distill version, macOS version, relevant tool versions, impact, and a minimal reproduction. Redact credentials, signing information, private paths, and customer data.
+Include the affected Distill version, operating system and version, relevant tool versions, impact, and a minimal reproduction. Redact credentials, signing information, private paths, and customer data.
 
 ## Security considerations
 

@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
@@ -6,9 +7,22 @@ use distill::artifact::Artifact;
 use distill::log::{LogPublication, LogPublisher, PublishedLog};
 use distill::process::{CancellationToken, Execution, execute_until, execute_with_log_until};
 use distill::record::RecordKind;
-use distill::{Action, RedactionPolicy, StatusClass, Tool, compact_text};
+use distill::{
+    Action, DiagnosticGroup, RedactionPolicy, Severity, StatusClass, Tool, compact_text,
+};
 
 use super::{emit, exit_code, format_duration};
+const LINT_COMPACTION_THRESHOLD: usize = 50;
+const LINT_EXAMPLE_LIMIT: usize = 3;
+const LINT_EXAMPLE_CHARACTER_LIMIT: usize = 180;
+
+#[derive(Default)]
+struct LintRuleSummary {
+    count: usize,
+    files: BTreeSet<String>,
+    examples: Vec<String>,
+}
+
 fn emit_execution(
     label: &str,
     execution: &Execution,
@@ -32,12 +46,18 @@ fn emit_execution(
     if action == Action::Test {
         emit_test_records(execution, policy);
     }
-    for diagnostic in execution.digest().diagnostics() {
-        let rendered = diagnostic_root.map_or_else(
-            || diagnostic.render(),
-            |root| diagnostic.render_relative_to(root),
-        );
-        emit(RecordKind::Diagnostic, &rendered, policy);
+    let diagnostics = execution.digest().diagnostics();
+    if tool == Tool::Swift
+        && action == Action::Lint
+        && diagnostics
+            .iter()
+            .map(DiagnosticGroup::count)
+            .fold(0_usize, usize::saturating_add)
+            > LINT_COMPACTION_THRESHOLD
+    {
+        emit_lint_summary(&diagnostics, diagnostic_root, policy);
+    } else {
+        emit_diagnostic_records(&diagnostics, diagnostic_root, policy);
     }
 
     let final_status = execution.report().final_status();
@@ -73,6 +93,102 @@ fn emit_execution(
         policy,
     );
     exit_code(final_status.code())
+}
+
+fn emit_diagnostic_records(
+    diagnostics: &[DiagnosticGroup],
+    diagnostic_root: Option<&Path>,
+    policy: RedactionPolicy,
+) {
+    for diagnostic in diagnostics {
+        let rendered = diagnostic_root.map_or_else(
+            || diagnostic.render(),
+            |root| diagnostic.render_relative_to(root),
+        );
+        emit(RecordKind::Diagnostic, &rendered, policy);
+    }
+}
+
+fn emit_lint_summary(
+    diagnostics: &[DiagnosticGroup],
+    diagnostic_root: Option<&Path>,
+    policy: RedactionPolicy,
+) {
+    let mut summaries = BTreeMap::<(Severity, String), LintRuleSummary>::new();
+    let mut severity_counts = BTreeMap::<Severity, usize>::new();
+    let mut files = BTreeSet::new();
+    let mut diagnostic_count = 0_usize;
+
+    for diagnostic in diagnostics {
+        let count = diagnostic.count();
+        diagnostic_count = diagnostic_count.saturating_add(count);
+        let severity_count = severity_counts.entry(diagnostic.severity()).or_default();
+        *severity_count = severity_count.saturating_add(count);
+
+        let source = diagnostic.source().unwrap_or("<unknown>");
+        files.insert(source.to_owned());
+        let summary = summaries
+            .entry((
+                diagnostic.severity(),
+                diagnostic.rule().unwrap_or("unclassified").to_owned(),
+            ))
+            .or_default();
+        summary.count = summary.count.saturating_add(count);
+        if summary.files.insert(source.to_owned()) && summary.examples.len() < LINT_EXAMPLE_LIMIT {
+            let rendered = diagnostic_root.map_or_else(
+                || diagnostic.render(),
+                |root| diagnostic.render_relative_to(root),
+            );
+            summary.examples.push(truncate_lint_example(&rendered));
+        }
+    }
+
+    let by_severity = severity_counts
+        .iter()
+        .map(|(severity, count)| format!("{severity}:{count}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    emit(
+        RecordKind::Diagnostic,
+        &format!(
+            "SwiftLint summary: diagnostics={diagnostic_count} files={} rules={} by-severity={by_severity}",
+            files.len(),
+            summaries.len(),
+        ),
+        policy,
+    );
+
+    for ((severity, rule), summary) in summaries {
+        let mut payload = format!(
+            "SwiftLint {severity} [rule={rule}]: count={} files={}",
+            summary.count,
+            summary.files.len(),
+        );
+        if !summary.examples.is_empty() {
+            payload.push_str(" examples=");
+            payload.push_str(&summary.examples.join(" | "));
+        }
+        let omitted_files = summary.files.len().saturating_sub(summary.examples.len());
+        if omitted_files > 0 {
+            payload.push_str(" (+");
+            payload.push_str(&omitted_files.to_string());
+            payload.push_str(" more files)");
+        }
+        emit(RecordKind::Diagnostic, &payload, policy);
+    }
+}
+
+fn truncate_lint_example(value: &str) -> String {
+    let mut characters = value.chars();
+    let example = characters
+        .by_ref()
+        .take(LINT_EXAMPLE_CHARACTER_LIMIT)
+        .collect::<String>();
+    if characters.next().is_some() {
+        format!("{example}…")
+    } else {
+        example
+    }
 }
 
 pub fn result_payload(label: &str, execution: &Execution) -> String {

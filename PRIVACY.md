@@ -18,7 +18,9 @@ Xcode redaction is mandatory: signing identities become `[SIGNING_IDENTITY]`, te
 
 Existing paths, symlinks, and concurrent reservations fail rather than overwrite. Incomplete logs are not published; lines over 4 MiB fail with `log_write`. The per-destination lock file remains for crash-safe coordination.
 
-Each destination ancestor must be owned by the invoking user or root, have no extended ACL, and not be group/world-writable unless sticky. Parent symlinks are resolved. After publication, timeout or interrupt retains and reports the log. Saved logs and lock files remain on the user's filesystem until removed.
+On macOS and Unix, each destination ancestor must be owned by the invoking user or root, have no extended ACL, and not be group/world-writable unless sticky. On Windows, saved logs require local-disk paths, trusted ancestor owners, and DACLs without untrusted write access; reparse-point parents and destinations are rejected. Temporary workspaces and log files use protected DACLs granting access only to the invoking user, Administrators, and SYSTEM. After publication, timeout or interrupt retains and reports the log. Saved logs and lock files remain on the user's filesystem until removed.
+
+On Windows, saved-log paths must resolve to a local volume; UNC paths and mapped network drives are rejected.
 
 `--stream` is limited to launched Xcode build products; streamed Xcode output is subject to Xcode redaction. Distill does not provide a raw-output escape hatch.
 

@@ -151,19 +151,28 @@ jobs:
             printf 'Tag %s does not match package version v%s\n' "$RELEASE_TAG" "$package_version" >&2
             exit 1
           fi
-      - name: Build macOS release binaries
+      - name: Install Windows GNU linker
+        run: brew install mingw-w64
+      - name: Build release binaries
         env:
           DIST_DIR: ${{ runner.temp }}/distill-release
           RELEASE_TAG: ${{ steps.verify.outputs.release_tag }}
         run: |
           set -euo pipefail
           mkdir -p "$DIST_DIR"
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-gnu
           for target in aarch64-apple-darwin x86_64-apple-darwin; do
             cargo build --locked --release --target "$target"
             tar -czf "$DIST_DIR/distill-${RELEASE_TAG}-${target}.tar.gz" -C "target/$target/release" distill
           done
-          (cd "$DIST_DIR" && shasum -a 256 distill-*.tar.gz > SHA256SUMS)
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
+            cargo build --locked --release --target x86_64-pc-windows-gnu
+          windows_dir="$DIST_DIR/windows"
+          mkdir -p "$windows_dir"
+          cp target/x86_64-pc-windows-gnu/release/distill.exe "$windows_dir/distill.exe"
+          (cd "$windows_dir" && zip -q "$DIST_DIR/distill-${RELEASE_TAG}-x86_64-pc-windows-gnu.zip" distill.exe)
+          rm -rf "$windows_dir"
+          (cd "$DIST_DIR" && shasum -a 256 distill-*.tar.gz distill-*.zip > SHA256SUMS)
       - name: Prepare release changelog and asset hashes
         env:
           DIST_DIR: ${{ runner.temp }}/distill-release
@@ -199,12 +208,13 @@ jobs:
           output_dir = Path(os.environ["DIST_DIR"])
           arm64 = output_dir / f"distill-{os.environ['RELEASE_TAG']}-aarch64-apple-darwin.tar.gz"
           x86_64 = output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-apple-darwin.tar.gz"
+          windows = output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-pc-windows-gnu.zip"
           with (output_dir / "release-changelog.md").open("w") as notes:
               notes.write("## Changelog\n\n")
               notes.write(changes)
               notes.write(
                   f"\n\n<!-- distill-release source={os.environ['RELEASE_SHA']} "
-                  f"aarch64={sha256(arm64)} x86_64={sha256(x86_64)} "
+                  f"aarch64={sha256(arm64)} x86_64={sha256(x86_64)} windows={sha256(windows)} "
                   f"sha256sums={sha256(output_dir / 'SHA256SUMS')} -->\n"
               )
           PY
@@ -217,6 +227,7 @@ jobs:
           path: |
             ${{ runner.temp }}/distill-release/distill-${{ steps.verify.outputs.release_tag }}-aarch64-apple-darwin.tar.gz
             ${{ runner.temp }}/distill-release/distill-${{ steps.verify.outputs.release_tag }}-x86_64-apple-darwin.tar.gz
+            ${{ runner.temp }}/distill-release/distill-${{ steps.verify.outputs.release_tag }}-x86_64-pc-windows-gnu.zip
             ${{ runner.temp }}/distill-release/SHA256SUMS
             ${{ runner.temp }}/distill-release/release-changelog.md
   attest:
@@ -247,6 +258,7 @@ jobs:
         with:
           subject-path: |
             ${{ runner.temp }}/distill-release/distill-*.tar.gz
+            ${{ runner.temp }}/distill-release/distill-*.zip
             ${{ runner.temp }}/distill-release/SHA256SUMS
   release:
     name: Publish GitHub Release
@@ -306,7 +318,7 @@ jobs:
           changelog_path = output_dir / "release-changelog.md"
           changelog = changelog_path.read_text()
           marker = re.search(
-              r"(<!-- distill-release source=([0-9a-f]+) aarch64=([0-9a-f]{64}) x86_64=([0-9a-f]{64}) sha256sums=([0-9a-f]{64}) -->)\s*\Z",
+              r"(<!-- distill-release source=([0-9a-f]+) aarch64=([0-9a-f]{64}) x86_64=([0-9a-f]{64}) windows=([0-9a-f]{64}) sha256sums=([0-9a-f]{64}) -->)\s*\Z",
               changelog,
           )
           if marker is None or marker.group(2) != os.environ["RELEASE_SHA"]:
@@ -315,6 +327,7 @@ jobs:
           archives = (
               (output_dir / f"distill-{os.environ['RELEASE_TAG']}-aarch64-apple-darwin.tar.gz", marker.group(3)),
               (output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-apple-darwin.tar.gz", marker.group(4)),
+              (output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-pc-windows-gnu.zip", marker.group(5)),
           )
           for path, expected in archives:
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -324,7 +337,7 @@ jobs:
           expected_sums = "".join(f"{digest}  {path.name}\n" for path, digest in archives)
           if sums_path.read_text() != expected_sums:
               raise SystemExit("SHA256SUMS does not match the release archives")
-          if hashlib.sha256(sums_path.read_bytes()).hexdigest() != marker.group(5):
+          if hashlib.sha256(sums_path.read_bytes()).hexdigest() != marker.group(6):
               raise SystemExit("Release checksum-file hash mismatch")
 
           generated = Path(os.environ["GENERATED_NOTES"]).read_text().strip()
@@ -334,14 +347,14 @@ jobs:
           repository = os.environ["GITHUB_REPOSITORY"]
           body += (
               "\n\n## Verify downloads\n\n"
-              "Download `SHA256SUMS` with both archives, then run:\n\n"
+              "Download `SHA256SUMS` with all three release archives, then run:\n\n"
               "```sh\n"
               "shasum -a 256 --check SHA256SUMS\n"
               "```\n\n"
           )
           if os.environ["REPOSITORY_VISIBILITY"] == "public":
               body += (
-                  "GitHub build provenance attestations are published for both archives and `SHA256SUMS`. "
+                  "GitHub build provenance attestations are published for all release archives and `SHA256SUMS`. "
                   "Verify a downloaded asset with GitHub CLI:\n\n"
                   "```sh\n"
                   f"gh attestation verify <asset> --repo {repository}\n"
@@ -363,19 +376,21 @@ jobs:
           set -euo pipefail
           arm64_name="distill-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz"
           x86_64_name="distill-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz"
+          windows_name="distill-${RELEASE_TAG}-x86_64-pc-windows-gnu.zip"
           arm64_asset="$DIST_DIR/$arm64_name"
           x86_64_asset="$DIST_DIR/$x86_64_name"
+          windows_asset="$DIST_DIR/$windows_name"
           sha256sums_name="SHA256SUMS"
           sha256sums_asset="$DIST_DIR/$sha256sums_name"
           notes_file="$RELEASE_NOTES"
           release_json="$RUNNER_TEMP/release.json"
 
-          python3 - "$DIST_DIR" "$arm64_name" "$x86_64_name" <<'PY'
+          python3 - "$DIST_DIR" "$arm64_name" "$x86_64_name" "$windows_name" <<'PY'
           from pathlib import Path
           import sys
 
           directory = Path(sys.argv[1])
-          expected = {sys.argv[2], sys.argv[3], "SHA256SUMS", "release-changelog.md"}
+          expected = {sys.argv[2], sys.argv[3], sys.argv[4], "SHA256SUMS", "release-changelog.md"}
           actual = {path.name for path in directory.iterdir()}
           if actual != expected:
               raise SystemExit(f"Unexpected release artifact set: {sorted(actual)}")
@@ -390,15 +405,15 @@ jobs:
 
           text = Path(sys.argv[1]).read_text()
           marker = re.search(
-              r"<!-- distill-release source=([0-9a-f]+) aarch64=([0-9a-f]{64}) x86_64=([0-9a-f]{64}) sha256sums=([0-9a-f]{64}) -->\s*\Z",
+              r"<!-- distill-release source=([0-9a-f]+) aarch64=([0-9a-f]{64}) x86_64=([0-9a-f]{64}) windows=([0-9a-f]{64}) sha256sums=([0-9a-f]{64}) -->\s*\Z",
               text,
           )
           if marker is None or marker.group(1) != sys.argv[2]:
               raise SystemExit("Release notes have no valid terminal digest marker")
-          print(marker.group(2), marker.group(3), marker.group(4))
+          print(marker.group(2), marker.group(3), marker.group(4), marker.group(5))
           PY
           )"
-          read -r expected_arm64_sha expected_x86_64_sha expected_sums_sha <<< "$expected_hashes"
+          read -r expected_arm64_sha expected_x86_64_sha expected_windows_sha expected_sums_sha <<< "$expected_hashes"
 
           verify_tag_sha() {
             local tag_sha
@@ -411,36 +426,36 @@ jobs:
           }
 
           read_release_state() {
-            python3 - "$release_json" "$RELEASE_SHA" "$RELEASE_TAG" "$arm64_name" "$x86_64_name" "$sha256sums_name" "$expected_arm64_sha" "$expected_x86_64_sha" "$expected_sums_sha" "$1" <<'PY'
+            python3 - "$release_json" "$RELEASE_SHA" "$RELEASE_TAG" "$arm64_name" "$x86_64_name" "$windows_name" "$sha256sums_name" "$expected_arm64_sha" "$expected_x86_64_sha" "$expected_windows_sha" "$expected_sums_sha" "$1" <<'PY'
           import json
           from pathlib import Path
           import re
           import sys
 
           release = json.loads(Path(sys.argv[1]).read_text())
-          source_sha, tag, arm64, x86_64, sums, expected_arm64, expected_x86_64, expected_sums, mode = sys.argv[2:]
+          source_sha, tag, arm64, x86_64, windows, sums, expected_arm64, expected_x86_64, expected_windows, expected_sums, mode = sys.argv[2:]
           if release["tagName"] != tag:
               raise SystemExit("Existing release has an unexpected tag")
           marker = re.search(
-              r"<!-- distill-release source=([0-9a-f]+) aarch64=([0-9a-f]{64}) x86_64=([0-9a-f]{64}) sha256sums=([0-9a-f]{64}) -->\s*\Z",
+              r"<!-- distill-release source=([0-9a-f]+) aarch64=([0-9a-f]{64}) x86_64=([0-9a-f]{64}) windows=([0-9a-f]{64}) sha256sums=([0-9a-f]{64}) -->\s*\Z",
               release.get("body") or "",
           )
           if marker is None or marker.group(1) != source_sha:
               raise SystemExit("Existing release is not from this workflow commit")
-          if marker.group(2, 3, 4) != (expected_arm64, expected_x86_64, expected_sums):
+          if marker.group(2, 3, 4, 5) != (expected_arm64, expected_x86_64, expected_windows, expected_sums):
               raise SystemExit("Existing release digest marker does not match this build")
-          expected = {arm64, x86_64, sums}
+          expected = {arm64, x86_64, windows, sums}
           actual = {asset["name"] for asset in release["assets"]}
           if release["isDraft"]:
               if mode == "complete" and actual != expected:
                   raise SystemExit("Draft assets do not match this build")
               if mode != "complete" and not actual <= expected:
                   raise SystemExit(f"Unexpected draft asset set: {sorted(actual)}")
-              print("draft", marker.group(2), marker.group(3), marker.group(4))
+              print("draft", marker.group(2), marker.group(3), marker.group(4), marker.group(5))
           else:
               if actual != expected:
                   raise SystemExit(f"Unexpected published asset set: {sorted(actual)}")
-              print("published", marker.group(2), marker.group(3), marker.group(4))
+              print("published", marker.group(2), marker.group(3), marker.group(4), marker.group(5))
           PY
           }
 
@@ -448,21 +463,23 @@ jobs:
             local download_dir="$1"
             local expected_arm64="$2"
             local expected_x86_64="$3"
-            local expected_sums="$4"
+            local expected_windows="$4"
+            local expected_sums="$5"
             rm -rf "$download_dir"
             mkdir -p "$download_dir"
             gh release download "$RELEASE_TAG" \
               --dir "$download_dir" \
               --pattern "$arm64_name" \
               --pattern "$x86_64_name" \
+              --pattern "$windows_name" \
               --pattern "$sha256sums_name"
-            python3 - "$download_dir" "$arm64_name" "$x86_64_name" "$sha256sums_name" "$expected_arm64" "$expected_x86_64" "$expected_sums" <<'PY'
+            python3 - "$download_dir" "$arm64_name" "$x86_64_name" "$windows_name" "$sha256sums_name" "$expected_arm64" "$expected_x86_64" "$expected_windows" "$expected_sums" <<'PY'
           from pathlib import Path
           import hashlib
           import sys
 
           directory = Path(sys.argv[1])
-          for name, expected in zip(sys.argv[2:5], sys.argv[5:]):
+          for name, expected in zip(sys.argv[2:6], sys.argv[6:]):
               path = directory / name
               if path.is_symlink() or not path.is_file():
                   raise SystemExit(f"Missing or invalid release asset: {name}")
@@ -481,26 +498,26 @@ jobs:
               --draft \
               --title "$RELEASE_TAG" \
               --notes-file "$notes_file"
-            release_state="draft - - -"
+            release_state="draft - - - -"
           fi
 
-          read -r state recorded_arm64_sha recorded_x86_64_sha recorded_sums_sha <<< "$release_state"
+          read -r state recorded_arm64_sha recorded_x86_64_sha recorded_windows_sha recorded_sums_sha <<< "$release_state"
           if [[ "$state" == "published" ]]; then
-            verify_assets "$RUNNER_TEMP/release-published" "$recorded_arm64_sha" "$recorded_x86_64_sha" "$recorded_sums_sha"
+            verify_assets "$RUNNER_TEMP/release-published" "$recorded_arm64_sha" "$recorded_x86_64_sha" "$recorded_windows_sha" "$recorded_sums_sha"
             verify_tag_sha
             printf 'Release %s already published with verified assets.\n' "$RELEASE_TAG"
             exit 0
           fi
 
           gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG" --notes-file "$notes_file"
-          gh release upload "$RELEASE_TAG" "$arm64_asset" "$x86_64_asset" "$sha256sums_asset" --clobber
+          gh release upload "$RELEASE_TAG" "$arm64_asset" "$x86_64_asset" "$windows_asset" "$sha256sums_asset" --clobber
           gh release view "$RELEASE_TAG" --json tagName,isDraft,body,assets > "$release_json"
           release_state="$(read_release_state complete)"
-          read -r state recorded_arm64_sha recorded_x86_64_sha recorded_sums_sha <<< "$release_state"
+          read -r state recorded_arm64_sha recorded_x86_64_sha recorded_windows_sha recorded_sums_sha <<< "$release_state"
           if [[ "$state" != "draft" ]]; then
             printf 'Release %s changed unexpectedly before publication.\n' "$RELEASE_TAG" >&2
             exit 1
           fi
-          verify_assets "$RUNNER_TEMP/release-draft" "$expected_arm64_sha" "$expected_x86_64_sha" "$expected_sums_sha"
+          verify_assets "$RUNNER_TEMP/release-draft" "$expected_arm64_sha" "$expected_x86_64_sha" "$expected_windows_sha" "$expected_sums_sha"
           verify_tag_sha
           gh release edit "$RELEASE_TAG" --draft=false

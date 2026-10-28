@@ -1,10 +1,10 @@
 # distill
 
-`distill` wraps Xcode, Swift, SwiftLint, and Cargo on macOS, turning tool output into compact, deterministic digests.
+`distill` produces compact, deterministic digests while wrapping Xcode, Swift, SwiftLint, and Cargo. It runs on macOS and Windows x64 (GNU); Xcode actions require macOS.
 
 ## Install
 
-Download the matching archive from [GitHub Releases](https://github.com/lycaennaa/distill/releases): Apple Silicon uses `aarch64-apple-darwin`, Intel uses `x86_64-apple-darwin`. Extract `distill` and put it on your `PATH`. Binaries are unsigned and not notarized; Gatekeeper may warn.
+Download the matching archive from [GitHub Releases](https://github.com/lycaennaa/distill/releases): Apple Silicon uses `aarch64-apple-darwin`, Intel uses `x86_64-apple-darwin`, and Windows x64 GNU uses `x86_64-pc-windows-gnu` (a ZIP containing `distill.exe`). Extract the binary and put it on your `PATH`. Downloads are unsigned; macOS binaries are not notarized and Gatekeeper may warn.
 
 Install from the repository's default branch:
 

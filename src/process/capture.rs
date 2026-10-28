@@ -1,4 +1,5 @@
 use std::io::{self, BufRead, BufReader, Read};
+#[cfg(unix)]
 use std::os::fd::AsFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,7 +12,14 @@ use nix::poll::{PollFd, PollFlags, poll};
 
 use super::model::CaptureSinks;
 use crate::digest::{Digest, OutputLine, Stream};
-
+#[cfg(unix)]
+pub(super) trait CaptureReader: Read + AsFd {}
+#[cfg(unix)]
+impl<T: Read + AsFd> CaptureReader for T {}
+#[cfg(not(unix))]
+pub(super) trait CaptureReader: Read {}
+#[cfg(not(unix))]
+impl<T: Read> CaptureReader for T {}
 pub(super) const EVENT_CHANNEL_CAPACITY: usize = 128;
 const MAX_LINE_BYTES: usize = 65_536;
 const MAX_STRUCTURED_LINE_BYTES: usize = 4_194_304;
@@ -32,7 +40,7 @@ pub(super) fn spawn_reader<R>(
     capture_raw: bool,
 ) -> JoinHandle<()>
 where
-    R: Read + AsFd + Send + 'static,
+    R: CaptureReader + Send + 'static,
 {
     thread::spawn(move || {
         let mut reader = BufReader::new(reader);
@@ -107,6 +115,7 @@ fn send_event(sender: &SyncSender<ReaderEvent>, stop: &AtomicBool, mut event: Re
     }
 }
 
+#[cfg(unix)]
 fn wait_until_readable<R: AsFd>(reader: &BufReader<R>, stop: &AtomicBool) -> io::Result<bool> {
     #[cfg(unix)]
     {
@@ -151,6 +160,10 @@ fn wait_until_readable<R: AsFd>(reader: &BufReader<R>, stop: &AtomicBool) -> io:
     {
         Ok(!stop.load(Ordering::Relaxed))
     }
+}
+#[cfg(not(unix))]
+fn wait_until_readable(stop: &AtomicBool) -> bool {
+    !stop.load(Ordering::Relaxed)
 }
 
 struct BoundedLine {
@@ -218,11 +231,15 @@ impl LineAccumulator {
     }
 }
 
-fn read_chunk<R: Read + AsFd>(
+fn read_chunk<R: CaptureReader>(
     reader: &mut BufReader<R>,
     stop: &AtomicBool,
 ) -> io::Result<Option<Vec<u8>>> {
-    if !wait_until_readable(reader, stop)? {
+    #[cfg(unix)]
+    let readable = wait_until_readable(reader, stop)?;
+    #[cfg(not(unix))]
+    let readable = wait_until_readable(stop);
+    if !readable {
         return Ok(None);
     }
     let available = reader.fill_buf()?;

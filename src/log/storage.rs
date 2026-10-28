@@ -212,7 +212,11 @@ impl TempWorkspace {
         Ok(file)
     }
 
-    pub(super) fn publish(&self, destination_name: &str) -> Result<(), String> {
+    pub(super) fn publish(
+        &self,
+        _sanitized_file: &File,
+        destination_name: &str,
+    ) -> Result<(), String> {
         nix::unistd::linkat(
             self.directory.as_fd(),
             "publish.tmp",

@@ -1,9 +1,12 @@
 mod capture;
+mod child;
 mod execute;
 mod launch;
 mod model;
 mod supervisor;
 mod termination;
+#[cfg(windows)]
+mod windows;
 
 pub use execute::{
     execute, execute_until, execute_until_with_lines, execute_until_with_output, execute_with_log,

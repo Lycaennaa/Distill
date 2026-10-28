@@ -5,7 +5,7 @@ Distill supports macOS only. Use the repository's GitHub Issues for reproducible
 For bug reports, include:
 
 - Distill version (`distill --version`).
-- macOS version and relevant tool versions (`xcodebuild -version`, `swift --version`, or `cargo --version`).
+- Operating system version and relevant tool versions (`xcodebuild -version` on macOS, `swift --version`, or `cargo --version`).
 - A minimal reproduction, expected result, and actual result.
 - Relevant sanitized output and whether the command used `--plan`, `--save-log`, or `--stream`.
 

@@ -15,7 +15,9 @@ Distill parses compiler, lint, XCTest, and Cargo output into deterministic recor
 - `INFO` omits unavailable metadata and the discovered root. `planned/unresolved` marks a dry run; `unresolved` means product metadata is unknown. Resolved info omits `state`.
 - Child output is never copied raw to stdout.
 - `RESULT` reports exit code, owner, duration, and lower-precedence statuses. Success omits `class=success`; failures include their class.
-- A failing command without recognized diagnostics emits `FALLBACK` with up to 20 sanitized lines. Parsed diagnostics are not capped.
+- A failing command without recognized diagnostics emits `FALLBACK` with up to 20 sanitized lines.
+- SwiftLint runs with more than 50 diagnostics emit counts by severity and rule, plus up to three example locations per group. `--save-log` retains captured child output subject to redaction.
+- Other parsed diagnostics are not capped.
 - `--stream` sends launched-app output to stderr; digest records remain on stdout.
 - Paths inside the command root are relative; paths outside it remain absolute.
 

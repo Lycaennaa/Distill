@@ -14,11 +14,23 @@ pub(super) fn resolve_program(program: &OsStr) -> Option<PathBuf> {
     let process_cwd = std::env::current_dir().ok()?;
     let path = Path::new(program);
     if path.is_absolute() {
-        return is_executable(path).then(|| path.to_owned());
+        return resolve_candidate(path);
     }
-    if program.to_string_lossy().contains('/') {
-        let candidate = process_cwd.join(path);
-        return is_executable(&candidate).then_some(candidate);
+    let has_path_prefix = path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::Prefix(_)
+                | std::path::Component::RootDir
+                | std::path::Component::CurDir
+                | std::path::Component::ParentDir
+        )
+    });
+    #[cfg(windows)]
+    let has_path_separator = program.to_string_lossy().contains(['/', '\\']);
+    #[cfg(not(windows))]
+    let has_path_separator = program.to_string_lossy().contains('/');
+    if has_path_prefix || has_path_separator {
+        return resolve_candidate(&process_cwd.join(path));
     }
 
     let path_variable = std::env::var_os("PATH")?;
@@ -30,12 +42,34 @@ pub(super) fn resolve_program(program: &OsStr) -> Option<PathBuf> {
         } else {
             process_cwd.join(directory)
         };
-        let candidate = directory.join(program);
+        if let Some(candidate) = resolve_candidate(&directory.join(program)) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+#[cfg(windows)]
+fn resolve_candidate(path: &Path) -> Option<PathBuf> {
+    if let Some(extension) = path.extension() {
+        let extension = extension.to_string_lossy();
+        return if extension.eq_ignore_ascii_case("exe") || extension.eq_ignore_ascii_case("com") {
+            is_executable(path).then(|| path.to_path_buf())
+        } else {
+            None
+        };
+    }
+    for extension in ["exe", "com"] {
+        let candidate = path.with_extension(extension);
         if is_executable(&candidate) {
             return Some(candidate);
         }
     }
     None
+}
+
+#[cfg(not(windows))]
+fn resolve_candidate(path: &Path) -> Option<PathBuf> {
+    is_executable(path).then(|| path.to_path_buf())
 }
 
 /// Spawn one detached process without retaining ownership after successful spawn.
@@ -88,5 +122,39 @@ fn is_executable(path: &Path) -> bool {
     #[cfg(not(unix))]
     {
         true
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use super::resolve_program;
+
+    static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn resolves_executables_without_extension_but_never_batch_scripts() {
+        let directory = std::env::temp_dir().join(format!(
+            "distill-resolver-{}-{}",
+            std::process::id(),
+            NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let result = || -> std::io::Result<()> {
+            fs::create_dir(&directory)?;
+            let executable = directory.join("tool.exe");
+            fs::write(&executable, b"test executable")?;
+            let script = directory.join("script.cmd");
+            fs::write(&script, b"echo not launched")?;
+
+            assert_eq!(
+                resolve_program(directory.join("tool").as_os_str()),
+                Some(executable)
+            );
+            assert_eq!(resolve_program(script.as_os_str()), None);
+            fs::remove_dir_all(&directory)
+        };
+        result().expect("exercise Windows executable resolution");
     }
 }

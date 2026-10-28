@@ -41,3 +41,43 @@ jobs:
           "$distill" --cwd "$GITHUB_WORKSPACE/tests/fixtures/real-swift-package" swift build -- --configuration release --build-path "$GITHUB_WORKSPACE/target/ci-swift-build"
           "$distill" --cwd "$GITHUB_WORKSPACE" cargo build -- --locked
           "$distill" --cwd "$GITHUB_WORKSPACE" cargo clippy -- --all-targets
+
+  windows:
+    name: Windows runtime tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          components: clippy
+      - name: Run Windows library tests
+        run: cargo test --locked --lib
+      - name: Run Windows process tests
+        run: cargo test --locked --test process_windows
+      - name: Run Windows Clippy
+        run: cargo clippy --locked --lib -- -D warnings
+      - name: Build and smoke the Windows binary
+        run: |
+          cargo build --locked --release
+          .\target\release\distill.exe --version
+
+  windows-gnu:
+    name: Cross-build Windows GNU target
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: Install GNU cross linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gcc-mingw-w64-x86-64
+      - name: Install Windows GNU Rust target
+        run: rustup target add x86_64-pc-windows-gnu
+      - name: Build Windows GNU release binary
+        env:
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+        run: cargo build --locked --release --target x86_64-pc-windows-gnu

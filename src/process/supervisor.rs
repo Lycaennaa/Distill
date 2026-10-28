@@ -1,4 +1,4 @@
-use std::process::{Child, ExitStatus};
+use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::capture::{CaptureState, EVENT_CHANNEL_CAPACITY, ReaderEvent, spawn_reader};
+use super::child::ChildProcess;
 use super::model::{CancellationToken, CaptureSinks, ProcessError};
 use super::termination::{
     GroupSignal, GroupSignalResult, StopReason, begin_termination, force_child, send_group_signal,
@@ -31,17 +32,17 @@ pub(super) struct SupervisedChild {
 }
 
 pub(super) fn supervise_child(
-    mut child: Child,
+    mut child: impl ChildProcess,
     deadline: Option<Instant>,
     cancellation: &CancellationToken,
     sinks: CaptureSinks<'_>,
 ) -> Result<SupervisedChild, ProcessError> {
     let pid = child.id();
-    let Some(stdout) = child.stdout.take() else {
+    let Some(stdout) = child.take_stdout() else {
         terminate_child(&mut child, pid);
         return Err(ProcessError::MissingPipe(Stream::Stdout));
     };
-    let Some(stderr) = child.stderr.take() else {
+    let Some(stderr) = child.take_stderr() else {
         terminate_child(&mut child, pid);
         return Err(ProcessError::MissingPipe(Stream::Stderr));
     };
@@ -74,6 +75,7 @@ pub(super) fn supervise_child(
     ) {
         Ok(state) => state,
         Err(error) => {
+            terminate_child(&mut child, pid);
             capture_stop.store(true, Ordering::Relaxed);
             drop(stdout_reader.join());
             drop(stderr_reader.join());
@@ -120,7 +122,7 @@ struct SupervisorState {
 }
 
 fn supervise_loop(
-    child: &mut Child,
+    child: &mut dyn ChildProcess,
     pid: u32,
     deadline: Option<Instant>,
     cancellation: &CancellationToken,
@@ -147,7 +149,7 @@ fn supervise_loop(
         request_stop_if_needed(child, pid, deadline, cancellation, &mut state);
         force_after_grace(child, pid, &mut state);
 
-        let finished = operation_finished(pid, &state);
+        let finished = operation_finished(child, pid, &state);
         if state.stop_reason.is_some()
             && state
                 .cleanup_deadline
@@ -183,7 +185,7 @@ fn supervise_loop(
     }
 }
 
-fn reap_child_bounded(child: &mut Child, pid: u32) -> Option<ExitStatus> {
+fn reap_child_bounded(child: &mut dyn ChildProcess, pid: u32) -> Option<ExitStatus> {
     let _group_result = force_child(child, pid);
     let deadline = Instant::now().checked_add(POLL_INTERVAL)?;
     loop {
@@ -195,7 +197,7 @@ fn reap_child_bounded(child: &mut Child, pid: u32) -> Option<ExitStatus> {
     }
 }
 
-fn poll_child(child: &mut Child, pid: u32) -> Result<Option<ExitStatus>, ProcessError> {
+fn poll_child(child: &mut dyn ChildProcess, pid: u32) -> Result<Option<ExitStatus>, ProcessError> {
     match child.try_wait() {
         Ok(status) => Ok(status),
         Err(_error) => {
@@ -205,12 +207,12 @@ fn poll_child(child: &mut Child, pid: u32) -> Result<Option<ExitStatus>, Process
     }
 }
 
-fn terminate_child(child: &mut Child, pid: u32) {
+fn terminate_child(child: &mut dyn ChildProcess, pid: u32) {
     let _result = reap_child_bounded(child, pid);
 }
 
 fn request_stop_if_needed(
-    child: &mut Child,
+    child: &mut dyn ChildProcess,
     pid: u32,
     deadline: Option<Instant>,
     cancellation: &CancellationToken,
@@ -251,7 +253,7 @@ fn request_stop_if_needed(
     }
 }
 
-fn force_after_grace(child: &mut Child, pid: u32, state: &mut SupervisorState) {
+fn force_after_grace(child: &mut dyn ChildProcess, pid: u32, state: &mut SupervisorState) {
     if state.stop_reason.is_some()
         && !state.force_sent
         && state
@@ -270,7 +272,7 @@ const fn capture_finished(state: &SupervisorState) -> bool {
     state.capture.is_finished()
 }
 
-fn operation_finished(pid: u32, state: &SupervisorState) -> bool {
+fn operation_finished(child: &mut dyn ChildProcess, pid: u32, state: &SupervisorState) -> bool {
     if state.child_status.is_none() || !capture_finished(state) {
         return false;
     }
@@ -282,7 +284,10 @@ fn operation_finished(pid: u32, state: &SupervisorState) -> bool {
     } else {
         reason.signal()
     };
-    matches!(send_group_signal(pid, signal), GroupSignalResult::Gone)
+    matches!(
+        send_group_signal(child, pid, signal),
+        GroupSignalResult::Gone
+    )
 }
 
 fn wait_interval(

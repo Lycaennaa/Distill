@@ -143,6 +143,62 @@ fn swiftlint_diagnostic_paths_are_relative_to_selected_root() -> TestResult {
 }
 
 #[test]
+fn large_swiftlint_output_is_summarized_by_dynamic_rule_and_severity() -> TestResult {
+    let root = fixture("swiftlint-compaction")?;
+    let sources = root.join("Sources");
+    fs::create_dir(&sources)?;
+    fs::write(sources.join("First.swift"), "")?;
+    fs::write(sources.join("Second.swift"), "")?;
+
+    let bin = root.join("bin");
+    fs::create_dir(&bin)?;
+    let fake_swiftlint = bin.join("swiftlint");
+    fs::write(
+        &fake_swiftlint,
+        r#"#!/bin/sh
+index=1
+while [ "$index" -le 51 ]; do
+  if [ "$index" -eq 1 ]; then
+    printf '%s\n' 'Sources/First.swift:1:1: error: Example violation (future_error_rule)'
+  elif [ "$index" -le 26 ]; then
+    printf 'Sources/First.swift:%s:1: warning: Example violation (future_rule)\n' "$index"
+  else
+    printf 'Sources/Second.swift:%s:1: warning: Example violation (future_rule)\n' "$index"
+  fi
+  index=$((index + 1))
+done
+exit 2
+"#,
+    )?;
+    let mut permissions = fs::metadata(&fake_swiftlint)?.permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&fake_swiftlint, permissions)?;
+
+    let cwd = root.to_str().ok_or("fixture path is not UTF-8")?;
+    let output = run_distill(&["--cwd", cwd, "swift", "lint"], &bin)?;
+
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains(
+        "SwiftLint summary: diagnostics=51 files=2 rules=2 by-severity=error:1,warning:50"
+    ));
+    assert!(stdout.contains("SwiftLint error [rule=future_error_rule]: count=1 files=1"));
+    assert!(stdout.contains("SwiftLint warning [rule=future_rule]: count=50 files=2"));
+    assert!(stdout.contains("Sources/First.swift"));
+    assert!(stdout.contains("Sources/Second.swift"));
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("DIAG:"))
+            .count(),
+        3
+    );
+    assert!(stdout.contains("class=lint owner=child"));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
 fn bare_invocation_displays_help() -> TestResult {
     let output = run_distill(&[], std::path::Path::new(""))?;
 
