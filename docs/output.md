@@ -10,7 +10,7 @@ INFO: kind=binary state=unresolved
 
 Payload control characters and backslashes are escaped. Record kinds: `PLAN`, `DIAG`, `TEST`, `LIST`, `ACTION`, `INFO`, `RESULT`, `FAILURE`, `FALLBACK`, and `LOG`.
 
-Distill parses compiler, lint, XCTest, and Cargo output into deterministic records. Cargo test summaries include pass/fail/skipped counts; recognized test failures include failed cases. `xcode list` reports projects/workspaces, targets, configurations, and schemes. Test summaries omit successful case details.
+Distill parses compiler, lint, XCTest, Cargo, and Gradle output into deterministic records. Swift and Cargo test summaries report executed, passed, failed, and skipped counts; Gradle summaries use standard JUnit XML reports for test tasks observed during that invocation. Failed Gradle cases emit `TEST` records with the task, test name, and JUnit reason; up to 100 failure details are emitted. The Gradle summary is omitted rather than partial if collection exceeds 4,096 test tasks, 4,096 XML files, 64 MiB per file, or 256 MiB total. Failed Gradle tasks emit a `DIAG` record with the task and the captured `What went wrong` reason when available. Test summaries omit successful case details.
 
 - `INFO` omits unavailable metadata and the discovered root. `planned/unresolved` marks a dry run; `unresolved` means product metadata is unknown. Resolved info omits `state`.
 - Child output is never copied raw to stdout.

@@ -1,5 +1,5 @@
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::error::ErrorKind;
@@ -42,6 +42,14 @@ struct CargoActionArgs {
     #[command(flatten)]
     action: ActionArgs,
 }
+#[derive(Debug, Clone, Args)]
+struct GradleArgs {
+    #[arg(value_name = "TASK")]
+    task: OsString,
+
+    #[arg(value_name = "ARG", allow_hyphen_values = true)]
+    forwarded: Vec<OsString>,
+}
 
 #[derive(Debug, Clone, Subcommand)]
 enum ToolCommand {
@@ -57,6 +65,8 @@ enum ToolCommand {
     /// Run Cargo.
     #[command(subcommand)]
     Cargo(CargoCommand),
+    /// Run a Gradle wrapper.
+    Gradle(GradleArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -147,6 +157,7 @@ pub enum Tool {
     Xcode,
     Swift,
     Cargo,
+    Gradle,
 }
 
 impl std::fmt::Display for Tool {
@@ -155,6 +166,7 @@ impl std::fmt::Display for Tool {
             Self::Xcode => "xcode",
             Self::Swift => "swift",
             Self::Cargo => "cargo",
+            Self::Gradle => "gradle",
         })
     }
 }
@@ -172,6 +184,7 @@ pub enum Action {
     Package,
     Install,
     Xtask,
+    Run,
 }
 
 impl std::fmt::Display for Action {
@@ -186,6 +199,7 @@ impl std::fmt::Display for Action {
             Self::Package => "package",
             Self::Install => "install",
             Self::Xtask => "xtask",
+            Self::Run => "run",
         })
     }
 }
@@ -235,6 +249,14 @@ impl Invocation {
     #[must_use]
     pub fn forwarded_args(&self) -> &[OsString] {
         &self.forwarded_args
+    }
+    /// Resolve Gradle's project directory against the wrapper's working directory.
+    #[must_use]
+    pub fn gradle_project_root(&self, base: &Path) -> Option<PathBuf> {
+        if self.tool != Tool::Gradle {
+            return None;
+        }
+        crate::gradle::gradle_project_root(base, &self.forwarded_args)
     }
 
     #[must_use]
@@ -291,6 +313,12 @@ where
                 CargoCommand::Xtask(args) => (Action::Xtask, args),
             };
             (Tool::Cargo, action, args.action.forwarded, args.nightly)
+        }
+        ToolCommand::Gradle(args) => {
+            let mut forwarded = Vec::with_capacity(args.forwarded.len().saturating_add(1));
+            forwarded.push(args.task);
+            forwarded.extend(args.forwarded);
+            (Tool::Gradle, Action::Run, forwarded, false)
         }
     };
 

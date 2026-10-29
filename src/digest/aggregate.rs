@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Component, Path, PathBuf};
 
+use super::gradle::{GradleBuildFailure, GradleDigest};
 use super::model::{Diagnostic, FALLBACK_LINE_LIMIT, OutputLine, Severity, Stream};
 use super::parser::{compact_text, parse_diagnostics};
 use super::test::{TestDigest, TestFailure, TestSummary};
@@ -223,6 +224,7 @@ pub struct Digest {
     stderr_tail: VecDeque<OutputLine>,
     xcode: XcodeDigest,
     tests: TestDigest,
+    gradle: GradleDigest,
 }
 
 impl Digest {
@@ -237,6 +239,7 @@ impl Digest {
         }
         self.xcode.ingest(line.text());
         self.tests.ingest(line.text());
+        self.gradle.ingest(line.text());
     }
 
     /// Add an adapter-produced diagnostic to the same grouping policy.
@@ -273,6 +276,7 @@ impl Digest {
         }
         self.xcode.merge(&other.xcode);
         self.tests.merge(&other.tests);
+        self.gradle.merge(&other.gradle);
         append_tail(&mut self.stdout_tail, &other.stdout_tail, Stream::Stdout);
         append_tail(&mut self.stderr_tail, &other.stderr_tail, Stream::Stderr);
     }
@@ -303,6 +307,16 @@ impl Digest {
     #[must_use]
     pub fn test_failures(&self) -> &[TestFailure] {
         self.tests.test_failures()
+    }
+    /// Return Gradle test task paths observed in child output.
+    pub fn gradle_test_tasks(&self) -> impl Iterator<Item = &str> {
+        self.gradle.test_tasks().iter().map(String::as_str)
+    }
+
+    /// Return a Gradle build failure parsed from child output.
+    #[must_use]
+    pub const fn gradle_build_failure(&self) -> Option<&GradleBuildFailure> {
+        self.gradle.build_failure()
     }
 
     /// Select at most 20 lines from the two bounded stream tails.

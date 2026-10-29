@@ -16,6 +16,8 @@ pub mod status;
 pub(crate) mod tool_args;
 
 pub(crate) mod cargo_discovery;
+pub(crate) mod gradle;
+pub(crate) mod gradle_discovery;
 pub(crate) mod xcode_discovery;
 pub use artifact::{Artifact, ArtifactKind, ArtifactState};
 pub use cli::{
@@ -25,9 +27,9 @@ pub use command::{
     CommandBuildError, command_for, command_for_with_cancellation, command_for_with_deadline,
 };
 pub use digest::{
-    Diagnostic, DiagnosticGroup, DiagnosticLocation, Digest, FALLBACK_LINE_LIMIT, ListSection,
-    ListSectionKind, OutputLine, Severity, Stream, TestFailure, TestSummary, XcodeDigest,
-    compact_text, parse_diagnostic, parse_diagnostics,
+    Diagnostic, DiagnosticGroup, DiagnosticLocation, Digest, FALLBACK_LINE_LIMIT,
+    GradleBuildFailure, ListSection, ListSectionKind, OutputLine, Severity, Stream, TestFailure,
+    TestSummary, XcodeDigest, compact_text, parse_diagnostic, parse_diagnostics,
 };
 pub use discovery::{Discovery, RootKind, discover};
 pub use discovery_error::DiscoveryError;

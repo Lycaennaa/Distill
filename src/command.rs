@@ -7,6 +7,7 @@ use crate::discovery::{
     Discovery, DiscoveryContext, RootKind, check_deadline, discover_with_context,
 };
 use crate::discovery_error::DiscoveryError;
+use crate::gradle::{gradle_option_takes_value, is_gradle_test_action_component};
 use crate::process::{CancellationToken, CommandSpec};
 use crate::status::StatusClass;
 use crate::tool_args::{
@@ -75,9 +76,16 @@ fn command_for_with_context(
         discover_with_context(invocation, context).map_err(CommandBuildError::Discovery)?;
     check_deadline(context, discovery.root()).map_err(CommandBuildError::Discovery)?;
     let label = format!("{} {}", invocation.tool(), invocation.action());
-    let (program, child_action, status_class) = command_mapping(invocation);
-    let mut spec = CommandSpec::new(program)
-        .arg(child_action)
+    let (status_class, mut spec) = if invocation.tool() == Tool::Gradle {
+        (
+            gradle_status_class(invocation),
+            gradle_wrapper_command(&discovery),
+        )
+    } else {
+        let (program, child_action, status_class) = command_mapping(invocation);
+        (status_class, CommandSpec::new(program).arg(child_action))
+    };
+    spec = spec
         .label(label)
         .with_status_class(status_class)
         .current_dir(discovery.root().to_owned());
@@ -117,6 +125,7 @@ fn normalized_forwarded_args(invocation: &Invocation, discovery: &Discovery) -> 
     let names = match invocation.tool() {
         Tool::Xcode => &["-workspace", "-project"][..],
         Tool::Swift => &["--package-path", "--manifest-path"][..],
+        Tool::Gradle => &[][..],
         Tool::Cargo if invocation.action() == Action::Install => &["--path"][..],
         Tool::Cargo => &["--manifest-path"][..],
     };
@@ -152,6 +161,147 @@ const fn command_mapping(invocation: &Invocation) -> (&'static str, &'static str
         (Tool::Cargo, Action::Xtask) => ("cargo", "xtask", StatusClass::Compile),
         _ => ("", "", StatusClass::Compile),
     }
+}
+fn gradle_status_class(invocation: &Invocation) -> StatusClass {
+    if has_gradle_test_task(invocation.forwarded_args()) {
+        StatusClass::Test
+    } else {
+        StatusClass::Compile
+    }
+}
+
+fn has_gradle_test_task(arguments: &[OsString]) -> bool {
+    let mut consume_value = false;
+    for argument in arguments {
+        if consume_value {
+            consume_value = false;
+            continue;
+        }
+        let Some(argument) = argument.to_str() else {
+            continue;
+        };
+        if argument == "--" {
+            break;
+        }
+        if argument.starts_with('-') {
+            consume_value = gradle_option_takes_value(argument);
+            continue;
+        }
+        if argument
+            .rsplit(':')
+            .next()
+            .is_some_and(is_gradle_test_action_component)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+fn gradle_wrapper_command(discovery: &Discovery) -> CommandSpec {
+    let java = std::env::var_os("JAVA_HOME")
+        .filter(|home| !home.is_empty())
+        .map_or_else(
+            || OsString::from("java"),
+            |home| gradle_java_executable(home),
+        );
+    let java_options = std::env::var_os("JAVA_OPTS")
+        .map_or_else(String::new, |value| value.to_string_lossy().into_owned());
+    let gradle_options = std::env::var_os("GRADLE_OPTS")
+        .map_or_else(String::new, |value| value.to_string_lossy().into_owned());
+    CommandSpec::new(java)
+        .args(gradle_wrapper_jvm_options(&java_options, &gradle_options))
+        .arg("-Dorg.gradle.appname=gradlew")
+        .arg("-classpath")
+        .arg(
+            discovery
+                .root()
+                .join("gradle/wrapper/gradle-wrapper.jar")
+                .into_os_string(),
+        )
+        .arg("org.gradle.wrapper.GradleWrapperMain")
+}
+#[cfg(any(windows, test))]
+fn gradle_java_executable(home: OsString) -> OsString {
+    let home = std::path::PathBuf::from(home);
+    if home.to_str().is_some_and(|path| path.contains('"')) {
+        std::path::PathBuf::from(home.to_string_lossy().replace('"', ""))
+            .join("bin/java.exe")
+            .into_os_string()
+    } else {
+        home.join("bin/java.exe").into_os_string()
+    }
+}
+#[cfg(any(windows, test))]
+const GRADLE_WINDOWS_DEFAULT_JVM_OPTIONS: [&str; 3] =
+    ["-Dfile.encoding=UTF-8", "-Xmx64m", "-Xms64m"];
+
+#[cfg(any(windows, test))]
+fn gradle_wrapper_jvm_options(java_options: &str, gradle_options: &str) -> Vec<OsString> {
+    let mut options = GRADLE_WINDOWS_DEFAULT_JVM_OPTIONS
+        .iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+    options.extend(split_jvm_options(java_options));
+    options.extend(split_jvm_options(gradle_options));
+    options
+}
+
+#[cfg(any(windows, test))]
+fn split_jvm_options(value: &str) -> Vec<OsString> {
+    let mut options = Vec::new();
+    let mut current = String::new();
+    let mut characters = value.chars().peekable();
+    let mut quoted = false;
+    let mut argument_started = false;
+
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => {
+                let mut slashes = 1_usize;
+                while characters.peek() == Some(&'\\') {
+                    characters.next();
+                    slashes = slashes.saturating_add(1);
+                }
+                if characters.peek() == Some(&'"') {
+                    characters.next();
+                    current.extend(std::iter::repeat_n('\\', slashes / 2));
+                    if slashes.is_multiple_of(2) {
+                        quoted = !quoted;
+                    } else {
+                        current.push('"');
+                    }
+                } else {
+                    current.extend(std::iter::repeat_n('\\', slashes));
+                }
+                argument_started = true;
+            }
+            '"' => {
+                quoted = !quoted;
+                argument_started = true;
+            }
+            character if character.is_whitespace() && !quoted => {
+                if argument_started {
+                    options.push(OsString::from(std::mem::take(&mut current)));
+                    argument_started = false;
+                }
+            }
+            character => {
+                current.push(character);
+                argument_started = true;
+            }
+        }
+    }
+    if argument_started {
+        options.push(current.into());
+    }
+    options
+}
+
+#[cfg(not(windows))]
+fn gradle_wrapper_command(discovery: &Discovery) -> CommandSpec {
+    CommandSpec::new(discovery.root().join("gradlew").into_os_string())
 }
 
 fn automatic_flags(tool: Tool, action: Action, forwarded: &[OsString]) -> Vec<OsString> {
@@ -495,5 +645,94 @@ mod tests {
                 DiscoveryError::Interrupted { .. }
             ))
         ));
+    }
+    #[test]
+    fn gradle_test_action_detects_later_tasks_and_ignores_non_tasks() {
+        let clean_then_test = invocation(&["gradle", "clean", "test"]);
+        assert_eq!(gradle_status_class(&clean_then_test), StatusClass::Test);
+
+        let build_with_test_filter =
+            invocation(&["gradle", "assembleDebug", "--tests", "example.FooTest"]);
+        assert_eq!(
+            gradle_status_class(&build_with_test_filter),
+            StatusClass::Compile
+        );
+
+        let test_named_project = invocation(&["gradle", ":test:assemble"]);
+        assert_eq!(
+            gradle_status_class(&test_named_project),
+            StatusClass::Compile
+        );
+
+        let excluded_test = invocation(&["gradle", "build", "-x", "test"]);
+        assert_eq!(gradle_status_class(&excluded_test), StatusClass::Compile);
+
+        let project_cache_named_test =
+            invocation(&["gradle", "build", "--project-cache-dir", "test"]);
+        assert_eq!(
+            gradle_status_class(&project_cache_named_test),
+            StatusClass::Compile
+        );
+        let help_task_detail = invocation(&["gradle", "help", "--task", "test"]);
+        assert_eq!(gradle_status_class(&help_task_detail), StatusClass::Compile);
+        let build_with_short_gradle_home = invocation(&["gradle", "build", "-g", "test"]);
+        assert_eq!(
+            gradle_status_class(&build_with_short_gradle_home),
+            StatusClass::Compile
+        );
+
+        let build_with_gradle_home = invocation(&["gradle", "build", "--gradle-user-home", "test"]);
+        assert_eq!(
+            gradle_status_class(&build_with_gradle_home),
+            StatusClass::Compile
+        );
+
+        let build_with_lock_update = invocation(&["gradle", "build", "--update-locks", "test"]);
+        assert_eq!(
+            gradle_status_class(&build_with_lock_update),
+            StatusClass::Compile
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn gradle_classifier_consumes_non_utf8_option_operand() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let arguments = vec![
+            OsString::from("clean"),
+            OsString::from("--exclude-task"),
+            OsString::from_vec(vec![0xff]),
+            OsString::from("test"),
+        ];
+        assert!(has_gradle_test_task(&arguments));
+    }
+    #[test]
+    fn gradle_wrapper_options_preserve_defaults_and_quoted_arguments() {
+        let options = gradle_wrapper_jvm_options(
+            r#"-Xmx2g -Dmessage="hello world" -Dpath=C:\Gradle\cache"#,
+            r#"-Dflag=\"yes\""#,
+        );
+        assert_eq!(
+            options,
+            vec![
+                OsString::from("-Dfile.encoding=UTF-8"),
+                OsString::from("-Xmx64m"),
+                OsString::from("-Xms64m"),
+                OsString::from("-Xmx2g"),
+                OsString::from("-Dmessage=hello world"),
+                OsString::from(r"-Dpath=C:\Gradle\cache"),
+                OsString::from(r#"-Dflag="yes""#),
+            ]
+        );
+    }
+    #[test]
+    fn gradle_java_executable_strips_batch_script_quotes_from_java_home() {
+        let java_home = OsString::from(r#""C:\Program Files\Java\jdk-21""#);
+        assert_eq!(
+            gradle_java_executable(java_home),
+            std::path::PathBuf::from(r"C:\Program Files\Java\jdk-21")
+                .join("bin/java.exe")
+                .into_os_string()
+        );
     }
 }

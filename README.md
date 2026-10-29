@@ -1,6 +1,6 @@
 # distill
 
-`distill` produces compact, deterministic digests while wrapping Xcode, Swift, SwiftLint, and Cargo. It runs on macOS and Windows x64 (GNU); Xcode actions require macOS.
+`distill` produces compact, deterministic digests while wrapping Xcode, Swift, SwiftLint, Cargo, and Gradle wrappers. It runs on macOS and Windows x64 (GNU); Xcode actions require macOS.
 
 ## Install
 
@@ -32,6 +32,7 @@ Building from source requires Rust 1.94+.
 distill xcode build|test|list
 distill swift build|test|lint
 distill cargo build|test|fmt|package|install|clippy|xtask
+distill gradle <TASK> [ARG...]
 ```
 
 ```sh
@@ -39,6 +40,7 @@ distill swift build
 distill cargo test --all-targets
 distill cargo install --path . --locked
 distill xcode build --scheme Demo
+distill gradle :app:assembleDebug
 ```
 
 See [Usage](docs/usage.md) for command options, discovery, and action-specific behavior.

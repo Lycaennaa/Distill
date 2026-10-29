@@ -40,7 +40,7 @@ fn swift_test_emits_case_and_summary_records_without_fallback() -> TestResult {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(output.stderr, Vec::<u8>::new());
     let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("TEST: passed=1 failed=1 skipped=0"));
+    assert!(stdout.contains("TEST: executed=2 passed=1 failed=1 skipped=0"));
     assert!(stdout.contains("TEST: failed PackageTests.XTests/testFailure()"));
     assert!(stdout.contains("class=test owner=child"));
     assert!(!stdout.contains("FALLBACK:"));
@@ -150,7 +150,7 @@ fn cargo_test_summarizes_results_and_forwards_options() -> TestResult {
     assert!(stdout.contains(
         "received args: test --quiet --message-format=json-diagnostic-rendered-ansi --all-targets"
     ));
-    assert!(stdout.contains("TEST: passed=2 failed=1 skipped=1"));
+    assert!(stdout.contains("TEST: executed=3 passed=2 failed=1 skipped=1"));
     assert!(stdout.contains("class=test owner=child"));
     assert!(stdout.contains("FALLBACK: stdout: test result: FAILED."));
     fs::remove_dir_all(root)?;

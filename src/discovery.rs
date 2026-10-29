@@ -16,6 +16,7 @@ pub enum RootKind {
     XcodeProject,
     SwiftPackage,
     CargoPackage,
+    GradleWrapper,
     WorkingDirectory,
 }
 
@@ -26,6 +27,7 @@ impl fmt::Display for RootKind {
             Self::XcodeProject => "xcodeproj",
             Self::SwiftPackage => "swift-package",
             Self::CargoPackage => "cargo-package",
+            Self::GradleWrapper => "gradle-wrapper",
             Self::WorkingDirectory => "working-directory",
         })
     }
@@ -125,6 +127,9 @@ pub(crate) fn discover_with_context(
             | Action::Install
             | Action::Xtask),
         ) => crate::cargo_discovery::discover_cargo(invocation, action, &start, context),
+        (Tool::Gradle, Action::Run) => {
+            crate::gradle_discovery::discover_gradle(invocation, Action::Run, &start, context)
+        }
         _ => Err(DiscoveryError::Missing {
             tool: invocation.tool(),
             action: invocation.action(),

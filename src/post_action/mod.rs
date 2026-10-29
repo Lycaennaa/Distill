@@ -153,6 +153,10 @@ fn resolve_product(
         Tool::Xcode => xcode::resolve(build, execution, deadline, cancellation),
         Tool::Swift => swift::resolve(invocation, build, execution, deadline, cancellation),
         Tool::Cargo => cargo::resolve(invocation, build, execution, deadline, cancellation),
+        Tool::Gradle => Err(Failure {
+            class: StatusClass::PostAction,
+            message: "Gradle does not support product post-actions".to_owned(),
+        }),
     }
 }
 

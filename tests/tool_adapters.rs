@@ -406,3 +406,111 @@ fn rejects_invalid_swift_explicit_path_shapes() -> TestResult {
     drop(fs::remove_dir_all(root));
     Ok(())
 }
+#[test]
+fn gradle_summarizes_reports_from_explicit_project_dir() -> TestResult {
+    let root = fixture("gradle-wrapper")?;
+    let nested = root.join("app/src/test");
+    fs::create_dir_all(&nested)?;
+    let wrapper = root.join("gradlew");
+    let trace = root.join("gradle-wrapper-args.txt");
+    let project_dir = root.join("alternate-project");
+    let report_dir = project_dir.join("app/build/test-results/testDebugUnitTest");
+    fs::create_dir_all(&report_dir)?;
+    fs::write(
+        report_dir.join("TEST-example.xml"),
+        r#"<testsuite tests="4" skipped="1" failures="1" errors="0"><testcase classname="example.Check" name="passes"/><testcase classname="example.Check" name="fails"><failure message="wanted 2 but got 1"/></testcase><testcase classname="example.Check" name="ignored"><skipped/></testcase><testcase classname="example.Check" name="alsoPasses"/></testsuite>"#,
+    )?;
+    fs::write(
+        &wrapper,
+        r#"#!/bin/sh
+printf 'cwd=%s\n' "$PWD" > "$DISTILL_GRADLE_TRACE"
+for arg in "$@"; do printf 'arg=%s\n' "$arg" >> "$DISTILL_GRADLE_TRACE"; done
+printf '%s\n' '> Task :app:testDebugUnitTest FAILED'
+printf '%s\n' 'FAILURE: Build failed with an exception.'
+printf '%s\n' '* What went wrong:'
+printf '%s\n' "Execution failed for task ':app:testDebugUnitTest'."
+printf '%s\n' '> There were failing tests.'
+printf '%s\n' '* Try:'
+printf '%s\n' 'BUILD FAILED in 1s'
+exit 7
+"#,
+    )?;
+    let mut permissions = fs::metadata(&wrapper)?.permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&wrapper, permissions)?;
+    let bin = root.join("empty-bin");
+    fs::create_dir(&bin)?;
+    let cwd = nested.to_str().ok_or("nested path is not UTF-8")?;
+    let trace_path = trace.to_str().ok_or("trace path is not UTF-8")?;
+    let output = Command::new(env!("CARGO_BIN_EXE_distill"))
+        .args([
+            "--cwd",
+            cwd,
+            "gradle",
+            "clean",
+            "-p",
+            "alternate-project",
+            "test",
+            "--tests",
+            "example.Check",
+        ])
+        .env("PATH", &bin)
+        .env("DISTILL_GRADLE_TRACE", trace_path)
+        .output()?;
+
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("TEST: executed=3 passed=2 failed=1 skipped=1"));
+    assert!(
+        stdout.contains(
+            "TEST: failed :app:testDebugUnitTest example.Check.fails: wanted 2 but got 1"
+        )
+    );
+    assert!(
+        stdout
+            .contains("DIAG: Gradle task :app:testDebugUnitTest failed: There were failing tests.")
+    );
+    assert!(stdout.contains("class=test"));
+    assert_eq!(
+        fs::read_to_string(&trace)?,
+        format!(
+            "cwd={}\narg=clean\narg=-p\narg=alternate-project\narg=test\narg=--tests\narg=example.Check\n",
+            root.display()
+        )
+    );
+
+    fs::remove_file(&trace)?;
+    let plan = Command::new(env!("CARGO_BIN_EXE_distill"))
+        .args(["--cwd", cwd, "--plan", "gradle", "help"])
+        .env("PATH", &bin)
+        .env("DISTILL_GRADLE_TRACE", trace_path)
+        .output()?;
+    assert!(plan.status.success());
+    let plan_stdout = String::from_utf8(plan.stdout)?;
+    assert!(plan_stdout.contains("program=gradlew"));
+    assert!(!plan_stdout.contains(root.to_str().ok_or("root path is not UTF-8")?));
+    assert!(!plan_stdout.contains("TEST:"));
+    assert!(!trace.exists());
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
+fn gradle_requires_a_project_wrapper() -> TestResult {
+    let root = fixture("gradle-missing-wrapper")?;
+    let invocation = invocation(&root, &["gradle", "build"])?;
+    let error = distill::command::command_for(&invocation).expect_err("wrapper is required");
+
+    assert!(
+        error.to_string().starts_with("no gradle run root found"),
+        "unexpected error: {error}"
+    );
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

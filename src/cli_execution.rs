@@ -8,7 +8,8 @@ use distill::log::{LogPublication, LogPublisher, PublishedLog};
 use distill::process::{CancellationToken, Execution, execute_until, execute_with_log_until};
 use distill::record::RecordKind;
 use distill::{
-    Action, DiagnosticGroup, RedactionPolicy, Severity, StatusClass, Tool, compact_text,
+    Action, DiagnosticGroup, GradleBuildFailure, RedactionPolicy, Severity, StatusClass, Tool,
+    compact_text,
 };
 
 use super::{emit, exit_code, format_duration};
@@ -23,15 +24,25 @@ struct LintRuleSummary {
     examples: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+struct ExecutionMetadata<'a> {
+    diagnostic_root: Option<&'a Path>,
+    published_log: Option<&'a PublishedLog>,
+    gradle_test_summary: Option<&'a crate::gradle_test_results::GradleTestSummary>,
+}
 fn emit_execution(
     label: &str,
     execution: &Execution,
     tool: Tool,
     action: Action,
     policy: RedactionPolicy,
-    diagnostic_root: Option<&Path>,
-    published_log: Option<&PublishedLog>,
+    metadata: ExecutionMetadata<'_>,
 ) -> ExitCode {
+    let ExecutionMetadata {
+        diagnostic_root,
+        published_log,
+        gradle_test_summary,
+    } = metadata;
     if tool == Tool::Xcode && action == Action::List {
         for section in execution.digest().xcode().list_sections() {
             let values = section.values().join(", ");
@@ -43,8 +54,11 @@ fn emit_execution(
             emit(RecordKind::List, &payload, policy);
         }
     }
-    if action == Action::Test {
-        emit_test_records(execution, policy);
+    if action == Action::Test
+        || gradle_test_summary.is_some()
+        || (tool == Tool::Gradle && execution.digest().test_summary().has_tests())
+    {
+        emit_test_records(execution, gradle_test_summary, policy);
     }
     let diagnostics = execution.digest().diagnostics();
     if tool == Tool::Swift
@@ -61,8 +75,18 @@ fn emit_execution(
     }
 
     let final_status = execution.report().final_status();
-    let has_test_failures = !execution.digest().test_failures().is_empty();
-    if !final_status.is_success() && !execution.digest().has_diagnostics() && !has_test_failures {
+    let has_gradle_failure = if tool == Tool::Gradle && !final_status.is_success() {
+        emit_gradle_build_failure_record(execution.digest().gradle_build_failure(), policy)
+    } else {
+        false
+    };
+    let has_test_failures = !execution.digest().test_failures().is_empty()
+        || gradle_test_summary.is_some_and(|summary| summary.failed > 0);
+    if !final_status.is_success()
+        && !execution.digest().has_diagnostics()
+        && !has_test_failures
+        && !has_gradle_failure
+    {
         emit(RecordKind::Fallback, "no recognized diagnostics", policy);
         for line in execution.digest().fallback_lines() {
             let payload = format!("{}: {}", line.stream(), compact_text(line.text()));
@@ -230,19 +254,36 @@ pub fn result_payload(label: &str, execution: &Execution) -> String {
     )
 }
 
-fn emit_test_records(execution: &Execution, policy: RedactionPolicy) {
+fn emit_test_records(
+    execution: &Execution,
+    gradle_test_summary: Option<&crate::gradle_test_results::GradleTestSummary>,
+    policy: RedactionPolicy,
+) {
     let summary = execution.digest().test_summary();
-    if !summary.has_tests() {
+    if gradle_test_summary.is_none() && !summary.has_tests() {
         return;
     }
+    let (executed, passed, failed, skipped) = gradle_test_summary.map_or_else(
+        || {
+            (
+                summary.executed(),
+                summary.passed(),
+                summary.failed(),
+                summary.skipped(),
+            )
+        },
+        |summary| {
+            (
+                summary.executed,
+                summary.passed,
+                summary.failed,
+                summary.skipped,
+            )
+        },
+    );
     emit(
         RecordKind::Test,
-        &format!(
-            "passed={} failed={} skipped={}",
-            summary.passed(),
-            summary.failed(),
-            summary.skipped()
-        ),
+        &format!("executed={executed} passed={passed} failed={failed} skipped={skipped}"),
         policy,
     );
     for failure in execution.digest().test_failures() {
@@ -257,6 +298,58 @@ fn emit_test_records(execution: &Execution, policy: RedactionPolicy) {
             policy,
         );
     }
+    if let Some(summary) = gradle_test_summary {
+        for failure in &summary.failures {
+            emit(
+                RecordKind::Test,
+                &format!(
+                    "failed {} {}: {}",
+                    failure.task_path, failure.name, failure.reason
+                ),
+                policy,
+            );
+        }
+        let details_shown = u32::try_from(summary.failures.len()).unwrap_or(u32::MAX);
+        let details_omitted = summary.failed.saturating_sub(details_shown);
+        if details_omitted > 0 {
+            emit(
+                RecordKind::Test,
+                &format!("failure details omitted={details_omitted}"),
+                policy,
+            );
+        }
+    }
+}
+fn emit_gradle_build_failure_record(
+    failure: Option<&GradleBuildFailure>,
+    policy: RedactionPolicy,
+) -> bool {
+    let Some(failure) = failure else {
+        return false;
+    };
+    let tasks = failure.failed_tasks();
+    let Some(reason) = failure
+        .reason()
+        .or_else(|| (!tasks.is_empty()).then_some(""))
+    else {
+        return false;
+    };
+    let mut payload = if tasks.is_empty() {
+        "Gradle build failed".to_owned()
+    } else {
+        let subject = if tasks.len() == 1 {
+            "Gradle task"
+        } else {
+            "Gradle tasks"
+        };
+        format!("{subject} {} failed", tasks.join(", "))
+    };
+    if !reason.is_empty() {
+        payload.push_str(": ");
+        payload.push_str(reason);
+    }
+    emit(RecordKind::Diagnostic, &payload, policy);
+    true
 }
 
 pub fn emit_synthetic_failure(
@@ -270,7 +363,18 @@ pub fn emit_synthetic_failure(
     let Ok(execution) = Execution::wrapper_failure(class, message, Duration::ZERO) else {
         return ExitCode::from(1);
     };
-    emit_execution(label, &execution, tool, action, policy, None, None)
+    emit_execution(
+        label,
+        &execution,
+        tool,
+        action,
+        policy,
+        ExecutionMetadata {
+            diagnostic_root: None,
+            published_log: None,
+            gradle_test_summary: None,
+        },
+    )
 }
 pub fn run_execution(
     label: &str,
@@ -350,7 +454,8 @@ pub fn run_execution(
         None => None,
     };
 
-    let post_action = match execute_post_action(
+    if let Err(exit_code) = run_post_action(
+        label,
         invocation,
         spec,
         &mut execution,
@@ -358,19 +463,20 @@ pub fn run_execution(
         cancellation,
         policy,
     ) {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            return emit_synthetic_failure(
-                label,
-                StatusClass::GenericWrapper,
-                &error.to_string(),
-                invocation.tool(),
-                invocation.action(),
-                policy,
-            );
-        }
+        return exit_code;
+    }
+    let gradle_test_summary = match collect_gradle_test_summary_or_emit(
+        label,
+        invocation,
+        spec,
+        &mut execution,
+        deadline,
+        cancellation,
+        policy,
+    ) {
+        Ok(summary) => summary,
+        Err(exit_code) => return exit_code,
     };
-    emit_post_action(post_action.as_ref(), policy);
     execution.set_duration(operation_started.elapsed());
     emit_execution(
         label,
@@ -378,9 +484,114 @@ pub fn run_execution(
         invocation.tool(),
         invocation.action(),
         policy,
-        spec.cwd(),
-        published_log.as_ref(),
+        execution_metadata(spec, published_log.as_ref(), gradle_test_summary.as_ref()),
     )
+}
+fn execution_metadata<'a>(
+    spec: &'a distill::CommandSpec,
+    published_log: Option<&'a PublishedLog>,
+    gradle_test_summary: Option<&'a crate::gradle_test_results::GradleTestSummary>,
+) -> ExecutionMetadata<'a> {
+    ExecutionMetadata {
+        diagnostic_root: spec.cwd(),
+        published_log,
+        gradle_test_summary,
+    }
+}
+fn run_post_action(
+    label: &str,
+    invocation: &distill::Invocation,
+    spec: &distill::CommandSpec,
+    execution: &mut Execution,
+    deadline: Option<Instant>,
+    cancellation: &CancellationToken,
+    policy: RedactionPolicy,
+) -> Result<(), ExitCode> {
+    match execute_post_action(invocation, spec, execution, deadline, cancellation, policy) {
+        Ok(outcome) => {
+            emit_post_action(outcome.as_ref(), policy);
+            Ok(())
+        }
+        Err(error) => Err(emit_synthetic_failure(
+            label,
+            StatusClass::GenericWrapper,
+            &error.to_string(),
+            invocation.tool(),
+            invocation.action(),
+            policy,
+        )),
+    }
+}
+fn collect_gradle_test_summary(
+    invocation: &distill::Invocation,
+    spec: &distill::CommandSpec,
+    execution: &mut Execution,
+    deadline: Option<Instant>,
+    cancellation: &CancellationToken,
+) -> Result<Option<crate::gradle_test_results::GradleTestSummary>, distill::ProcessError> {
+    let summary = if invocation.tool() != Tool::Gradle
+        || !execution.capture_complete()
+        || execution.report().final_status().owner() != distill::Owner::Child
+        || cancellation.is_cancelled()
+    {
+        None
+    } else {
+        spec.cwd().and_then(|root| {
+            let project_root = invocation.gradle_project_root(root)?;
+            crate::gradle_test_results::summarize(
+                &project_root,
+                execution.digest().gradle_test_tasks(),
+                deadline,
+                cancellation,
+            )
+        })
+    };
+    if invocation.tool() == Tool::Gradle && execution.capture_complete() {
+        add_gradle_summary_stop_status(execution, deadline, cancellation)?;
+    }
+    Ok(summary)
+}
+fn collect_gradle_test_summary_or_emit(
+    label: &str,
+    invocation: &distill::Invocation,
+    spec: &distill::CommandSpec,
+    execution: &mut Execution,
+    deadline: Option<Instant>,
+    cancellation: &CancellationToken,
+    policy: RedactionPolicy,
+) -> Result<Option<crate::gradle_test_results::GradleTestSummary>, ExitCode> {
+    collect_gradle_test_summary(invocation, spec, execution, deadline, cancellation).map_err(
+        |error| {
+            emit_synthetic_failure(
+                label,
+                StatusClass::GenericWrapper,
+                &error.to_string(),
+                invocation.tool(),
+                invocation.action(),
+                policy,
+            )
+        },
+    )
+}
+fn add_gradle_summary_stop_status(
+    execution: &mut Execution,
+    deadline: Option<Instant>,
+    cancellation: &CancellationToken,
+) -> Result<(), distill::ProcessError> {
+    if execution.report().final_status().owner() != distill::Owner::Child {
+        return Ok(());
+    }
+    let status = if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        Some((StatusClass::Timeout, "operation deadline exceeded"))
+    } else if cancellation.is_cancelled() {
+        Some((StatusClass::Interrupt, "operation interrupted"))
+    } else {
+        None
+    };
+    if let Some((class, message)) = status {
+        execution.add_wrapper_status(class, message)?;
+    }
+    Ok(())
 }
 
 fn emit_artifact(
@@ -484,4 +695,102 @@ fn add_publication_statuses(
         execution.add_wrapper_status(class, message)?;
     }
     Ok(())
+}
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::error::Error;
+
+    fn child_success() -> Result<Execution, distill::ProcessError> {
+        let spec = distill::CommandSpec::new("/bin/sh")
+            .args(["-c", "printf '%s\\n' '> Task :test'"])
+            .label("fake Gradle wrapper")
+            .with_status_class(StatusClass::Test);
+        execute_until(&spec, None, &CancellationToken::new())
+    }
+
+    fn verify_status(
+        execution: &Execution,
+        expected_class: StatusClass,
+        expected_code: i32,
+        expected_owner: distill::Owner,
+    ) -> Result<(), Box<dyn Error>> {
+        let status = execution.report().final_status();
+        if status.class() != expected_class
+            || status.code() != expected_code
+            || status.owner() != expected_owner
+        {
+            return Err(std::io::Error::other("unexpected final status").into());
+        }
+        Ok(())
+    }
+
+    fn collect_gradle_summary(
+        execution: &mut Execution,
+        deadline: Option<Instant>,
+        cancellation: &CancellationToken,
+    ) -> Result<Option<crate::gradle_test_results::GradleTestSummary>, Box<dyn Error>> {
+        let invocation = distill::parse(["distill", "gradle", "test"])?;
+        let spec = distill::CommandSpec::new("gradlew").current_dir(std::env::current_dir()?);
+        Ok(collect_gradle_test_summary(
+            &invocation,
+            &spec,
+            execution,
+            deadline,
+            cancellation,
+        )?)
+    }
+    #[test]
+    fn report_deadline_changes_child_success_to_timeout() -> Result<(), Box<dyn Error>> {
+        let mut execution = child_success()?;
+        verify_status(&execution, StatusClass::Success, 0, distill::Owner::Child)?;
+        let deadline = Some(Instant::now());
+        let summary = collect_gradle_summary(&mut execution, deadline, &CancellationToken::new())?;
+        if summary.is_some() {
+            return Err(std::io::Error::other("expired report collection must be omitted").into());
+        }
+        verify_status(
+            &execution,
+            StatusClass::Timeout,
+            124,
+            distill::Owner::Wrapper,
+        )
+    }
+
+    #[test]
+    fn report_cancellation_changes_child_success_to_interrupt() -> Result<(), Box<dyn Error>> {
+        let mut execution = child_success()?;
+        verify_status(&execution, StatusClass::Success, 0, distill::Owner::Child)?;
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let summary = collect_gradle_summary(&mut execution, None, &cancellation)?;
+        if summary.is_some() {
+            return Err(
+                std::io::Error::other("cancelled report collection must be omitted").into(),
+            );
+        }
+        verify_status(
+            &execution,
+            StatusClass::Interrupt,
+            130,
+            distill::Owner::Wrapper,
+        )
+    }
+
+    #[test]
+    fn report_deadline_takes_precedence_over_cancellation() -> Result<(), Box<dyn Error>> {
+        let mut execution = child_success()?;
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let summary = collect_gradle_summary(&mut execution, Some(Instant::now()), &cancellation)?;
+        if summary.is_some() {
+            return Err(std::io::Error::other("expired report collection must be omitted").into());
+        }
+        verify_status(
+            &execution,
+            StatusClass::Timeout,
+            124,
+            distill::Owner::Wrapper,
+        )
+    }
 }

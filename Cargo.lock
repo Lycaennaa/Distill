@@ -168,11 +168,12 @@ dependencies = [
 
 [[package]]
 name = "distill"
-version = "2.2.0"
+version = "3.0.0"
 dependencies = [
  "clap",
  "nix",
  "plist",
+ "quick-xml",
  "serde_json",
  "sha2",
  "signal-hook",

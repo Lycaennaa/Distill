@@ -4,13 +4,13 @@ This document covers the Distill CLI. GitHub may separately collect information 
 
 ## Data and network behavior
 
-Distill runs locally and has no telemetry or network requests of its own. It launches the selected local tool (such as Xcode, Swift, SwiftLint, or Cargo) with the invoking user's environment. Those tools may access the network, read local files, execute build or test scripts, and create their own caches. Cargo may access the network while installing or resolving dependencies.
+Distill runs locally and has no telemetry or network requests of its own. It launches the selected local tool (such as Xcode, Swift, SwiftLint, Cargo, or a Gradle wrapper) with the invoking user's environment. Those tools may access the network, read local files, execute build or test scripts, and create their own caches. Gradle may download its configured distribution and project dependencies; Cargo may access the network while installing or resolving dependencies.
 
 `--plan` resolves command, root, and artifact intent from the filesystem. It does not launch a child or metadata command, and it ignores `--save-log` without creating a log. Product state that requires tool metadata is marked planned or unresolved. Wrapper-generated `PLAN` and `INFO` records do not disclose inherited environment values or unredacted child arguments; `INFO` does not print the discovered root.
 
 ## Output and saved logs
 
-Child output is untrusted. Paths inside the selected command root are rendered relative to that root; paths outside it may remain absolute. Other local path text may also appear in diagnostics and logs. Sanitization may miss unknown sensitive text, so output and logs are not guaranteed secret-free; review them before sharing.
+Child output is untrusted. Paths inside the selected command root are rendered relative to that root; paths outside it may remain absolute. Other local path text may also appear in diagnostics and logs. Gradle test failure names and reasons come from observed in-project JUnit reports; build failure reasons come from wrapper output. Sanitization may miss unknown sensitive text, so output and logs are not guaranteed secret-free; review them before sharing.
 
 `--save-log` captures the primary child's complete merged output, sanitizes it, and atomically publishes a new file. Log contents never go to stdout. The `LOG` record reports the canonical destination, sanitized byte count, SHA-256, and redaction policy before `RESULT`.
 

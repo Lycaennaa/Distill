@@ -8,8 +8,8 @@ Include the affected Distill version, operating system and version, relevant too
 
 ## Security considerations
 
-Distill launches the selected tool directly rather than through a shell, but it is not a sandbox. Wrapped build and test tools run with the caller's permissions and may execute project scripts or access files and networks themselves.
+Distill launches the selected tool directly rather than through a shell, but it is not a sandbox. Wrapped build and test tools, including Gradle, run with the caller's permissions and may execute project scripts or access files and networks themselves.
 
 Child diagnostics, fallback output, and saved logs are untrusted. Xcode redaction is mandatory for documented signing/profile/team/email patterns, but it is not a general secret scanner. Non-Xcode sanitization is best effort and may miss sensitive text. Review logs before sharing them; local paths can remain visible.
 
-Distill itself makes no network requests. Cargo installation and wrapped tools may use the network.
+Distill itself makes no network requests. Cargo installation, Gradle wrapper distribution downloads, and wrapped tools may use the network.

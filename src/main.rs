@@ -9,6 +9,7 @@ use distill::process::{CancellationToken, Execution, install_interrupt_handler};
 use distill::record::{Record, RecordKind};
 use distill::{DiscoveryError, RedactionPolicy, StatusClass, Tool, redact};
 mod cli_execution;
+mod gradle_test_results;
 
 fn main() -> ExitCode {
     let invocation = match parse(std::env::args_os()) {
@@ -69,12 +70,17 @@ fn main() -> ExitCode {
 
     if invocation.is_plan() {
         let injected = plan_injected_flags(&spec);
+        let plan_program = if invocation.tool() == Tool::Gradle {
+            "gradlew".to_owned()
+        } else {
+            spec.program().to_string_lossy().into_owned()
+        };
         emit(
             RecordKind::Plan,
             &format!(
                 "{label}: action={} program={} injected={injected}",
                 invocation.action(),
-                spec.program().to_string_lossy()
+                plan_program
             ),
             policy,
         );
