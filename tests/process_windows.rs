@@ -19,10 +19,11 @@ fn timeout_stops_a_windows_command() {
         &CancellationToken::new(),
     )
     .expect("execution should complete");
-
+    let final_status = execution.report().final_status();
     assert_eq!(
-        execution.report().final_status().class(),
-        StatusClass::Timeout
+        final_status.class(),
+        StatusClass::Timeout,
+        "unexpected final status: {final_status:?}"
     );
     assert_eq!(execution.report().final_status().code(), 124);
 }
@@ -43,10 +44,11 @@ fn cancellation_stops_a_windows_command() {
         &mut cancel_on_ready,
     )
     .expect("execution should complete");
-
+    let final_status = execution.report().final_status();
     assert_eq!(
-        execution.report().final_status().class(),
-        StatusClass::Interrupt
+        final_status.class(),
+        StatusClass::Interrupt,
+        "unexpected final status: {final_status:?}"
     );
 }
 
@@ -63,7 +65,11 @@ fn descendant_inheriting_output_pipes_does_not_delay_completion() {
     .expect("execution should complete");
     let elapsed = started.elapsed();
 
-    assert!(execution.report().final_status().is_success());
+    assert!(
+        execution.report().final_status().is_success(),
+        "unexpected final status: {:?}",
+        execution.report().final_status()
+    );
     assert!(
         elapsed < Duration::from_secs(8),
         "execution took {elapsed:?} while a descendant held inherited output pipes"
