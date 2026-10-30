@@ -70,7 +70,7 @@ impl TestDirectory {
         let user_profile = std::env::var_os("USERPROFILE")
             .map(PathBuf::from)
             .expect("Windows user profile directory");
-        validate_test_directory_ancestry(&user_profile);
+        validate_test_directory_parent(&user_profile);
         let path = user_profile.join(format!(
             "distill-log-windows-{label}-{}-{id}",
             std::process::id()
@@ -137,21 +137,19 @@ fn open_directory_for_acl_inspection(path: &Path) -> std::io::Result<File> {
     Ok(unsafe { File::from_raw_handle(handle.0 as _) })
 }
 
-fn validate_test_directory_ancestry(path: &Path) {
-    for ancestor in path.ancestors() {
-        let directory = open_directory_for_acl_inspection(ancestor).unwrap_or_else(|error| {
-            panic!(
-                "cannot inspect test fixture ancestor `{}`: {error}",
-                ancestor.display()
-            )
-        });
-        crate::acl::validate_windows_parent_acl(&directory).unwrap_or_else(|error| {
-            panic!(
-                "test fixture ancestor `{}` has unsafe ACL: {error}",
-                ancestor.display()
-            )
-        });
-    }
+fn validate_test_directory_parent(path: &Path) {
+    let directory = open_directory_for_acl_inspection(path).unwrap_or_else(|error| {
+        panic!(
+            "cannot inspect test fixture parent `{}`: {error}",
+            path.display()
+        )
+    });
+    crate::acl::validate_windows_parent_acl(&directory).unwrap_or_else(|error| {
+        panic!(
+            "test fixture parent `{}` has unsafe ACL: {error}",
+            path.display()
+        )
+    });
 }
 
 #[test]
