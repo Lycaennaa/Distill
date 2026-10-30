@@ -313,7 +313,8 @@ fn validate_windows_ace_access(
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
-                "log directory DACL grants write access to an untrusted principal (mask {mask:#010x})"
+                "log directory DACL grants write access to an untrusted principal (SID {}, mask {mask:#010x})",
+                windows_sid_string(sid)?,
             ),
         ));
     }
@@ -540,6 +541,38 @@ fn sid_bytes(sid: windows::Win32::Security::PSID) -> io::Result<Vec<u8>> {
     // SAFETY: a valid SID has `length` readable bytes.
     let bytes = unsafe { std::slice::from_raw_parts(sid.0.cast::<u8>(), length) };
     Ok(bytes.to_vec())
+}
+#[cfg(windows)]
+fn windows_sid_string(sid: windows::Win32::Security::PSID) -> io::Result<String> {
+    let bytes = sid_bytes(sid)?;
+    if bytes.len() < 8 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an invalid SID length",
+        ));
+    }
+    let sub_authority_count = usize::from(bytes[1]);
+    if bytes.len() != 8 + sub_authority_count * 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Windows returned an invalid SID length",
+        ));
+    }
+    let identifier_authority = bytes[2..8]
+        .iter()
+        .fold(0_u64, |authority, byte| (authority << 8) | u64::from(*byte));
+    let mut display = format!("S-{}-{identifier_authority}", bytes[0]);
+    for sub_authority in bytes[8..].chunks_exact(4) {
+        let sub_authority = u32::from_le_bytes([
+            sub_authority[0],
+            sub_authority[1],
+            sub_authority[2],
+            sub_authority[3],
+        ]);
+        display.push('-');
+        display.push_str(&sub_authority.to_string());
+    }
+    Ok(display)
 }
 
 #[cfg(all(windows, test))]
