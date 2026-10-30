@@ -67,10 +67,9 @@ pub(super) struct TestDirectory(PathBuf);
 impl TestDirectory {
     pub(super) fn new(label: &str) -> Self {
         let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::current_exe()
-            .expect("test executable path")
-            .parent()
-            .expect("test executable directory")
+        let path = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .expect("local application data directory")
             .join(format!(
                 "distill-log-windows-{label}-{}-{id}",
                 std::process::id()
