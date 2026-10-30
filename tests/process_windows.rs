@@ -10,12 +10,18 @@ fn cmd(script: &str) -> CommandSpec {
         .label("windows-process-test")
         .with_status_class(StatusClass::Compile)
 }
+fn powershell(script: &str) -> CommandSpec {
+    CommandSpec::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .label("windows-process-test")
+        .with_status_class(StatusClass::Compile)
+}
 
 #[test]
 fn timeout_stops_a_windows_command() {
     let execution = execute(
-        &cmd("ping -n 30 127.0.0.1 >NUL"),
-        Some(Duration::from_millis(200)),
+        &powershell("Start-Sleep -Seconds 30"),
+        Some(Duration::from_secs(1)),
         &CancellationToken::new(),
     )
     .expect("execution should complete");
@@ -38,7 +44,7 @@ fn cancellation_stops_a_windows_command() {
         Ok(())
     };
     let execution = execute_until_with_lines(
-        &cmd("echo ready & ping -n 30 127.0.0.1 >NUL"),
+        &powershell("Write-Output ready; Start-Sleep -Seconds 30"),
         None,
         &cancellation,
         &mut cancel_on_ready,
@@ -54,11 +60,11 @@ fn cancellation_stops_a_windows_command() {
 
 #[test]
 fn descendant_inheriting_output_pipes_does_not_delay_completion() {
-    // The started ping inherits cmd.exe's stdout/stderr and would otherwise keep
-    // the wrapper's output pipes open for roughly nine seconds.
+    // The started PowerShell process inherits cmd.exe's stdout/stderr and would
+    // otherwise keep the wrapper's output pipes open for ten seconds.
     let started = Instant::now();
     let execution = execute(
-        &cmd("start \"\" /B ping -n 10 127.0.0.1"),
+        &cmd("start /B powershell.exe -NoProfile -NonInteractive -Command Start-Sleep -Seconds 10"),
         Some(Duration::from_secs(5)),
         &CancellationToken::new(),
     )
