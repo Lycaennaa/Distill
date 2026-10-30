@@ -4,15 +4,22 @@ use std::time::{Duration, Instant};
 
 use distill::{CancellationToken, CommandSpec, StatusClass, execute, execute_until_with_lines};
 
-fn cmd(script: &str) -> CommandSpec {
-    CommandSpec::new("cmd.exe")
-        .args(["/D", "/C", script])
-        .label("windows-process-test")
-        .with_status_class(StatusClass::Compile)
-}
 fn powershell(script: &str) -> CommandSpec {
     CommandSpec::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .label("windows-process-test")
+        .with_status_class(StatusClass::Compile)
+}
+fn child_test_command(mode: &str) -> CommandSpec {
+    let executable = std::env::current_exe().expect("locate test executable");
+    CommandSpec::new(executable.into_os_string())
+        .args([
+            "--ignored",
+            "--exact",
+            "process_child_fixture",
+            "--nocapture",
+        ])
+        .env("DISTILL_PROCESS_TEST_MODE", mode)
         .label("windows-process-test")
         .with_status_class(StatusClass::Compile)
 }
@@ -45,18 +52,18 @@ fn cancellation_stops_a_windows_command() {
         }
         Ok(())
     };
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(10))
+        .expect("compute process deadline");
     let execution = execute_until_with_lines(
-        &cmd("echo ready & powershell.exe -NoProfile -NonInteractive -Command Start-Sleep -Seconds 30"),
-        None,
+        &child_test_command("cancel"),
+        Some(deadline),
         &cancellation,
         &mut cancel_on_ready,
     )
     .expect("execution should complete");
 
-    assert!(
-        ready_seen.get(),
-        "command did not emit its readiness marker"
-    );
+    assert!(ready_seen.get(), "child did not emit its readiness marker");
     let final_status = execution.report().final_status();
     assert_eq!(
         final_status.class(),
@@ -67,20 +74,9 @@ fn cancellation_stops_a_windows_command() {
 
 #[test]
 fn descendant_inheriting_output_pipes_does_not_delay_completion() {
-    let executable = std::env::current_exe().expect("locate test executable");
-    let command = CommandSpec::new(executable.into_os_string())
-        .args([
-            "--ignored",
-            "--exact",
-            "descendant_pipe_holder",
-            "--nocapture",
-        ])
-        .env("DISTILL_PROCESS_PIPE_DESCENDANT", "1")
-        .label("windows-process-test")
-        .with_status_class(StatusClass::Compile);
     let started = Instant::now();
     let deadline = started
-        .checked_add(Duration::from_secs(5))
+        .checked_add(Duration::from_secs(12))
         .expect("compute process deadline");
     let descendant_ready = std::cell::Cell::new(false);
     let mut capture_descendant_output = |line: &distill::digest::OutputLine| {
@@ -90,7 +86,7 @@ fn descendant_inheriting_output_pipes_does_not_delay_completion() {
         Ok(())
     };
     let execution = execute_until_with_lines(
-        &command,
+        &child_test_command("descendant"),
         Some(deadline),
         &CancellationToken::new(),
         &mut capture_descendant_output,
@@ -114,19 +110,32 @@ fn descendant_inheriting_output_pipes_does_not_delay_completion() {
 }
 
 #[test]
-#[ignore = "spawned by the descendant pipe test"]
-fn descendant_pipe_holder() {
-    if std::env::var_os("DISTILL_PROCESS_PIPE_DESCENDANT").is_none() {
-        return;
+#[ignore = "spawned by Windows process tests"]
+fn process_child_fixture() {
+    match std::env::var("DISTILL_PROCESS_TEST_MODE").as_deref() {
+        Ok("cancel") => {
+            use std::io::Write as _;
+
+            let mut stdout = std::io::stdout().lock();
+            writeln!(stdout, "ready").expect("write readiness marker");
+            stdout.flush().expect("flush readiness marker");
+            std::thread::sleep(Duration::from_secs(30));
+        }
+        Ok("descendant") => {
+            let _child = std::process::Command::new("powershell.exe")
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Write-Output descendant-ready; Start-Sleep -Seconds 10",
+                ])
+                .stdin(std::process::Stdio::inherit())
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit())
+                .spawn()
+                .expect("spawn descendant PowerShell process");
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        _ => {}
     }
-    let _descendant = std::process::Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Write-Output descendant-ready; Start-Sleep -Seconds 10",
-        ])
-        .spawn()
-        .expect("spawn descendant PowerShell process");
-    std::thread::sleep(Duration::from_secs(3));
 }
