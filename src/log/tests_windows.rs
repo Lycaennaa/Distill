@@ -62,20 +62,31 @@ fn create_private_stale_workspace(path: &Path) {
 }
 static NEXT_TEST_ID: AtomicU64 = AtomicU64::new(0);
 
-struct TestDirectory(PathBuf);
+pub(super) struct TestDirectory(PathBuf);
 
 impl TestDirectory {
-    fn new(label: &str) -> Self {
+    pub(super) fn new(label: &str) -> Self {
         let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "distill-log-windows-{label}-{}-{id}",
-            std::process::id()
-        ));
-        fs::create_dir(&path).expect("create test directory");
+        let path = std::env::current_exe()
+            .expect("test executable path")
+            .parent()
+            .expect("test executable directory")
+            .join(format!(
+                "distill-log-windows-{label}-{}-{id}",
+                std::process::id()
+            ));
+        let mut security =
+            crate::acl::PrivateWindowsSecurity::new().expect("build private test directory DACL");
+        let attributes = security
+            .security_attributes()
+            .expect("build test directory security attributes");
+        let wide = wide_path(&path);
+        unsafe { CreateDirectoryW(PCWSTR(wide.as_ptr()), Some(std::ptr::from_ref(&attributes))) }
+            .expect("create private test directory");
         Self(path)
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }

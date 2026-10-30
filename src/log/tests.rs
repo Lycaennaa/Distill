@@ -2,10 +2,48 @@ use std::fs;
 use std::time::Duration;
 
 use super::*;
-
-fn destination(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("distill-log-{name}-{}.log", std::process::id()))
+struct TestDestination {
+    path: PathBuf,
+    #[cfg(windows)]
+    _directory: super::tests_windows::TestDirectory,
 }
+
+impl std::ops::Deref for TestDestination {
+    type Target = std::path::Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
+}
+
+impl AsRef<std::path::Path> for TestDestination {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+fn destination(name: &str) -> TestDestination {
+    #[cfg(windows)]
+    let directory = super::tests_windows::TestDirectory::new(name);
+    #[cfg(windows)]
+    let path = directory
+        .path()
+        .join(format!("distill-log-{name}-{}.log", std::process::id()));
+    #[cfg(not(windows))]
+    let path = std::env::temp_dir().join(format!("distill-log-{name}-{}.log", std::process::id()));
+
+    TestDestination {
+        path,
+        #[cfg(windows)]
+        _directory: directory,
+    }
+}
+impl AsRef<std::ffi::OsStr> for TestDestination {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.path.as_os_str()
+    }
+}
+
 fn remove_lock_file(path: &Path) {
     let Some(name) = path.file_name().and_then(std::ffi::OsStr::to_str) else {
         return;
