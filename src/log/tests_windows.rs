@@ -67,7 +67,7 @@ pub(super) struct TestDirectory(PathBuf);
 impl TestDirectory {
     pub(super) fn new(label: &str) -> Self {
         let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::var_os("LOCALAPPDATA")
+        let path = std::env::var_os("USERPROFILE")
             .map(PathBuf::from)
             .expect("local application data directory")
             .join(format!(
@@ -269,16 +269,15 @@ fn publish_links_from_the_sanitized_handle_after_path_replacement() {
         .expect("commit the opened sanitized file");
     let published = directory.path().join("published.log");
     assert_eq!(
-        fs::read(&published).expect("read committed output"),
-        b"sanitized payload\n"
-    );
-    assert_eq!(
         fs::read(&staged_path).expect("read replacement path"),
         b"attacker-owned\n"
     );
-
     drop(sanitized);
     assert!(workspace.cleanup().is_none());
+    assert_eq!(
+        fs::read(&published).expect("read committed output"),
+        b"sanitized payload\n"
+    );
     fs::remove_file(moved_path).expect("remove moved staged file");
     fs::remove_file(published).expect("remove committed output");
 }
