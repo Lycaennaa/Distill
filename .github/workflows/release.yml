@@ -167,12 +167,8 @@ jobs:
           done
           CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
             cargo build --locked --release --target x86_64-pc-windows-gnu
-          windows_dir="$DIST_DIR/windows"
-          mkdir -p "$windows_dir"
-          cp target/x86_64-pc-windows-gnu/release/distill.exe "$windows_dir/distill.exe"
-          (cd "$windows_dir" && zip -q "$DIST_DIR/distill-${RELEASE_TAG}-x86_64-pc-windows-gnu.zip" distill.exe)
-          rm -rf "$windows_dir"
-          (cd "$DIST_DIR" && shasum -a 256 distill-*.tar.gz distill-*.zip > SHA256SUMS)
+          cp target/x86_64-pc-windows-gnu/release/distill.exe "$DIST_DIR/distill-${RELEASE_TAG}-x86_64-pc-windows-gnu.exe"
+          (cd "$DIST_DIR" && shasum -a 256 distill-*.tar.gz distill-*.exe > SHA256SUMS)
       - name: Prepare release changelog and asset hashes
         env:
           DIST_DIR: ${{ runner.temp }}/distill-release
@@ -208,7 +204,7 @@ jobs:
           output_dir = Path(os.environ["DIST_DIR"])
           arm64 = output_dir / f"distill-{os.environ['RELEASE_TAG']}-aarch64-apple-darwin.tar.gz"
           x86_64 = output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-apple-darwin.tar.gz"
-          windows = output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-pc-windows-gnu.zip"
+          windows = output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-pc-windows-gnu.exe"
           with (output_dir / "release-changelog.md").open("w") as notes:
               notes.write("## Changelog\n\n")
               notes.write(changes)
@@ -227,7 +223,7 @@ jobs:
           path: |
             ${{ runner.temp }}/distill-release/distill-${{ steps.verify.outputs.release_tag }}-aarch64-apple-darwin.tar.gz
             ${{ runner.temp }}/distill-release/distill-${{ steps.verify.outputs.release_tag }}-x86_64-apple-darwin.tar.gz
-            ${{ runner.temp }}/distill-release/distill-${{ steps.verify.outputs.release_tag }}-x86_64-pc-windows-gnu.zip
+            ${{ runner.temp }}/distill-release/distill-${{ steps.verify.outputs.release_tag }}-x86_64-pc-windows-gnu.exe
             ${{ runner.temp }}/distill-release/SHA256SUMS
             ${{ runner.temp }}/distill-release/release-changelog.md
   attest:
@@ -258,7 +254,7 @@ jobs:
         with:
           subject-path: |
             ${{ runner.temp }}/distill-release/distill-*.tar.gz
-            ${{ runner.temp }}/distill-release/distill-*.zip
+            ${{ runner.temp }}/distill-release/distill-*.exe
             ${{ runner.temp }}/distill-release/SHA256SUMS
   release:
     name: Publish GitHub Release
@@ -327,7 +323,7 @@ jobs:
           archives = (
               (output_dir / f"distill-{os.environ['RELEASE_TAG']}-aarch64-apple-darwin.tar.gz", marker.group(3)),
               (output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-apple-darwin.tar.gz", marker.group(4)),
-              (output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-pc-windows-gnu.zip", marker.group(5)),
+              (output_dir / f"distill-{os.environ['RELEASE_TAG']}-x86_64-pc-windows-gnu.exe", marker.group(5)),
           )
           for path, expected in archives:
               digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -376,7 +372,7 @@ jobs:
           set -euo pipefail
           arm64_name="distill-${RELEASE_TAG}-aarch64-apple-darwin.tar.gz"
           x86_64_name="distill-${RELEASE_TAG}-x86_64-apple-darwin.tar.gz"
-          windows_name="distill-${RELEASE_TAG}-x86_64-pc-windows-gnu.zip"
+          windows_name="distill-${RELEASE_TAG}-x86_64-pc-windows-gnu.exe"
           arm64_asset="$DIST_DIR/$arm64_name"
           x86_64_asset="$DIST_DIR/$x86_64_name"
           windows_asset="$DIST_DIR/$windows_name"

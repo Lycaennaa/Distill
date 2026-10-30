@@ -81,3 +81,9 @@ jobs:
         env:
           CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
         run: cargo build --locked --release --target x86_64-pc-windows-gnu
+      - name: Upload Windows GNU executable
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: distill-windows-gnu
+          path: target/x86_64-pc-windows-gnu/release/distill.exe
+          if-no-files-found: error

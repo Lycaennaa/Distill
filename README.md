@@ -4,7 +4,7 @@
 
 ## Install
 
-Download the matching archive from [GitHub Releases](https://github.com/lycaennaa/distill/releases): Apple Silicon uses `aarch64-apple-darwin`, Intel uses `x86_64-apple-darwin`, and Windows x64 GNU uses `x86_64-pc-windows-gnu` (a ZIP containing `distill.exe`). Extract the binary and put it on your `PATH`. Downloads are unsigned; macOS binaries are not notarized and Gatekeeper may warn.
+Download the matching release asset from [GitHub Releases](https://github.com/lycaennaa/distill/releases): Apple Silicon uses `aarch64-apple-darwin`, Intel uses `x86_64-apple-darwin`, and Windows x64 GNU uses `distill-<version>-x86_64-pc-windows-gnu.exe` directly. macOS assets are `.tar.gz` archives; extract the binary and put it on your `PATH`. Downloads are unsigned; macOS binaries are not notarized and Gatekeeper may warn.
 
 Install from the repository's default branch:
 
