@@ -70,25 +70,27 @@ impl TestDirectory {
         let user_profile = std::env::var_os("USERPROFILE")
             .map(PathBuf::from)
             .expect("Windows user profile directory");
-        validate_test_directory_parent(&user_profile);
         let path = user_profile.join(format!(
             "distill-log-windows-{label}-{}-{id}",
             std::process::id()
         ));
-        let mut security =
-            crate::acl::PrivateWindowsSecurity::new().expect("build private test directory DACL");
-        let attributes = security
-            .security_attributes()
-            .expect("build test directory security attributes");
-        let wide = wide_path(&path);
-        unsafe { CreateDirectoryW(PCWSTR(wide.as_ptr()), Some(std::ptr::from_ref(&attributes))) }
-            .expect("create private test directory");
+        create_private_test_directory(&path);
         Self(path)
     }
 
     pub(super) fn path(&self) -> &Path {
         &self.0
     }
+}
+fn create_private_test_directory(path: &Path) {
+    let mut security =
+        crate::acl::PrivateWindowsSecurity::new().expect("build private test directory DACL");
+    let attributes = security
+        .security_attributes()
+        .expect("build test directory security attributes");
+    let wide = wide_path(path);
+    unsafe { CreateDirectoryW(PCWSTR(wide.as_ptr()), Some(std::ptr::from_ref(&attributes))) }
+        .expect("create private test directory");
 }
 
 impl Drop for TestDirectory {
@@ -117,39 +119,6 @@ fn open_directory_for_security(path: &Path) -> File {
     .expect("open test directory");
     // SAFETY: CreateFileW returned an owned directory handle.
     unsafe { File::from_raw_handle(handle.0 as _) }
-}
-
-fn open_directory_for_acl_inspection(path: &Path) -> std::io::Result<File> {
-    let wide = wide_path(path);
-    let handle = unsafe {
-        CreateFileW(
-            PCWSTR(wide.as_ptr()),
-            (FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL).0,
-            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-            None,
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
-            None,
-        )
-    }
-    .map_err(|error| std::io::Error::other(error.to_string()))?;
-    // SAFETY: CreateFileW returned an owned directory handle.
-    Ok(unsafe { File::from_raw_handle(handle.0 as _) })
-}
-
-fn validate_test_directory_parent(path: &Path) {
-    let directory = open_directory_for_acl_inspection(path).unwrap_or_else(|error| {
-        panic!(
-            "cannot inspect test fixture parent `{}`: {error}",
-            path.display()
-        )
-    });
-    crate::acl::validate_windows_parent_acl(&directory).unwrap_or_else(|error| {
-        panic!(
-            "test fixture parent `{}` has unsafe ACL: {error}",
-            path.display()
-        )
-    });
 }
 
 #[test]
@@ -210,6 +179,42 @@ fn windows_rejects_parent_with_untrusted_write_acl() {
     let directory = TestDirectory::new("unsafe-acl");
     let directory_handle = open_directory_for_security(directory.path());
     crate::acl::set_test_untrusted_write_acl(&directory_handle)
+        .expect("install untrusted directory ACE");
+    drop(directory_handle);
+
+    assert!(LogPublisher::prepare(directory.path().join("unsafe.log")).is_err());
+}
+
+#[test]
+fn windows_allows_untrusted_subdirectory_creation_on_ancestor() {
+    let directory = TestDirectory::new("ancestor-add-subdirectory");
+    let parent = directory.path().join("private-child");
+    create_private_test_directory(&parent);
+
+    let directory_handle = open_directory_for_security(directory.path());
+    crate::acl::set_test_untrusted_subdirectory_acl(&directory_handle)
+        .expect("install untrusted ancestor ACE");
+    drop(directory_handle);
+
+    let destination = parent.join("ancestor.log");
+    let mut publisher = LogPublisher::prepare(&destination)
+        .expect("allow untrusted subdirectory creation on an ancestor");
+    publisher
+        .write_chunk(b"ancestor rights accepted\n")
+        .expect("capture output");
+    let result = publisher.publish(RedactionPolicy::BestEffort, None, &CancellationToken::new());
+    let published = result.published().expect("publish under ancestor ACL");
+    assert_eq!(
+        fs::read_to_string(published.path()).expect("read published output"),
+        "ancestor rights accepted\n"
+    );
+}
+
+#[test]
+fn windows_rejects_untrusted_subdirectory_creation_on_parent() {
+    let directory = TestDirectory::new("unsafe-subdirectory-acl");
+    let directory_handle = open_directory_for_security(directory.path());
+    crate::acl::set_test_untrusted_subdirectory_acl(&directory_handle)
         .expect("install untrusted directory ACE");
     drop(directory_handle);
 

@@ -54,16 +54,30 @@ pub fn has_extended_acl(file: &File) -> io::Result<bool> {
 }
 #[cfg(windows)]
 pub fn validate_windows_parent_acl(file: &File) -> io::Result<()> {
-    validate_windows_acl(file, false)
+    validate_windows_acl(file, false, 0)
+}
+
+#[cfg(windows)]
+pub fn validate_windows_ancestor_acl(file: &File) -> io::Result<()> {
+    // This right permits creating new siblings, not replacing existing path components.
+    validate_windows_acl(
+        file,
+        false,
+        windows::Win32::Storage::FileSystem::FILE_ADD_SUBDIRECTORY.0,
+    )
 }
 
 #[cfg(windows)]
 pub fn validate_windows_private_acl(file: &File) -> io::Result<()> {
-    validate_windows_acl(file, true)
+    validate_windows_acl(file, true, 0)
 }
 
 #[cfg(windows)]
-fn validate_windows_acl(file: &File, private: bool) -> io::Result<()> {
+fn validate_windows_acl(
+    file: &File,
+    private: bool,
+    allowed_untrusted_write_mask: u32,
+) -> io::Result<()> {
     use std::os::windows::io::AsRawHandle;
 
     use windows::Win32::Foundation::HANDLE;
@@ -139,7 +153,7 @@ fn validate_windows_acl(file: &File, private: bool) -> io::Result<()> {
             ));
         }
     }
-    validate_windows_dacl(dacl, private, &trusted)
+    validate_windows_dacl(dacl, private, allowed_untrusted_write_mask, &trusted)
 }
 #[cfg(windows)]
 fn windows_dword_size(size: usize) -> io::Result<u32> {
@@ -167,6 +181,7 @@ fn windows_status_error(status: u32) -> io::Error {
 fn validate_windows_dacl(
     dacl: *mut windows::Win32::Security::ACL,
     private: bool,
+    allowed_untrusted_write_mask: u32,
     trusted: &[&[u8]],
 ) -> io::Result<()> {
     use windows::Win32::Security::{
@@ -197,7 +212,7 @@ fn validate_windows_dacl(
         // SAFETY: `dacl` is valid and `index` is bounded by its reported ACE count.
         unsafe { GetAce(dacl, index, std::ptr::from_mut(&mut ace)) }
             .map_err(|error| io::Error::other(error.to_string()))?;
-        validate_windows_ace(ace, private, trusted)?;
+        validate_windows_ace(ace, private, allowed_untrusted_write_mask, trusted)?;
     }
     Ok(())
 }
@@ -206,6 +221,7 @@ fn validate_windows_dacl(
 fn validate_windows_ace(
     ace: *mut std::ffi::c_void,
     private: bool,
+    allowed_untrusted_write_mask: u32,
     trusted: &[&[u8]],
 ) -> io::Result<()> {
     use windows::Win32::Security::{
@@ -272,7 +288,7 @@ fn validate_windows_ace(
             "log DACL contains a malformed SID",
         ));
     }
-    validate_windows_ace_access(mask, sid, private, trusted)
+    validate_windows_ace_access(mask, sid, private, allowed_untrusted_write_mask, trusted)
 }
 
 #[cfg(windows)]
@@ -280,10 +296,10 @@ fn validate_windows_ace_access(
     mask: u32,
     sid: windows::Win32::Security::PSID,
     private: bool,
+    allowed_untrusted_write_mask: u32,
     trusted: &[&[u8]],
 ) -> io::Result<()> {
     const MAXIMUM_ALLOWED_MASK: u32 = 0x0200_0000;
-
     // SAFETY: the SID is validated and points either into the ACE or a trusted SID buffer.
     let principal_is_trusted = trusted.iter().any(|known| unsafe {
         windows::Win32::Security::EqualSid(
@@ -298,7 +314,7 @@ fn validate_windows_ace_access(
             "temporary log DACL grants access to an untrusted principal",
         ));
     }
-    let untrusted_write_mask = MAXIMUM_ALLOWED_MASK
+    let untrusted_write_mask = (MAXIMUM_ALLOWED_MASK
         | windows::Win32::Foundation::GENERIC_ALL.0
         | windows::Win32::Foundation::GENERIC_WRITE.0
         | windows::Win32::Storage::FileSystem::DELETE.0
@@ -308,7 +324,8 @@ fn validate_windows_ace_access(
         | windows::Win32::Storage::FileSystem::FILE_WRITE_ATTRIBUTES.0
         | windows::Win32::Storage::FileSystem::FILE_WRITE_EA.0
         | windows::Win32::Storage::FileSystem::WRITE_DAC.0
-        | windows::Win32::Storage::FileSystem::WRITE_OWNER.0;
+        | windows::Win32::Storage::FileSystem::WRITE_OWNER.0)
+        & !allowed_untrusted_write_mask;
     if !principal_is_trusted && mask & untrusted_write_mask != 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -577,6 +594,19 @@ fn windows_sid_string(sid: windows::Win32::Security::PSID) -> io::Result<String>
 
 #[cfg(all(windows, test))]
 pub fn set_test_untrusted_write_acl(file: &File) -> io::Result<()> {
+    set_test_untrusted_acl(file, windows::Win32::Storage::FileSystem::FILE_ADD_FILE.0)
+}
+
+#[cfg(all(windows, test))]
+pub fn set_test_untrusted_subdirectory_acl(file: &File) -> io::Result<()> {
+    set_test_untrusted_acl(
+        file,
+        windows::Win32::Storage::FileSystem::FILE_ADD_SUBDIRECTORY.0,
+    )
+}
+
+#[cfg(all(windows, test))]
+fn set_test_untrusted_acl(file: &File, access_mask: u32) -> io::Result<()> {
     use std::os::windows::io::AsRawHandle;
 
     use windows::Win32::Foundation::HANDLE;
@@ -605,7 +635,7 @@ pub fn set_test_untrusted_write_acl(file: &File) -> io::Result<()> {
         AddAccessAllowedAce(
             acl_ptr,
             ACL_REVISION,
-            windows::Win32::Storage::FileSystem::FILE_ADD_FILE.0,
+            access_mask,
             windows::Win32::Security::PSID(world.as_ptr().cast_mut().cast()),
         )
         .map_err(|error| io::Error::other(error.to_string()))?;

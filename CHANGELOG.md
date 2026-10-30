@@ -12,3 +12,4 @@ Notable user-visible changes are recorded here.
 - Add Cargo xtask support. The public `Action::Xtask` variant is source-breaking, requiring major version 2.1.0.
 - Add Cargo install support with validated local `--path` discovery.
 - Add a Windows x64 GNU release package; Xcode actions remain macOS-only.
+- Allow untrusted `FILE_ADD_SUBDIRECTORY` access on non-final Windows log-path ancestors while keeping the final destination parent and private log ACLs strict.

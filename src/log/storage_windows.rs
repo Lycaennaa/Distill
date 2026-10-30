@@ -25,7 +25,8 @@ use windows::Win32::Storage::FileSystem::{
 use windows::core::PCWSTR;
 
 use crate::acl::{
-    PrivateWindowsSecurity, validate_windows_parent_acl, validate_windows_private_acl,
+    PrivateWindowsSecurity, validate_windows_ancestor_acl, validate_windows_parent_acl,
+    validate_windows_private_acl,
 };
 
 use super::LogError;
@@ -156,9 +157,15 @@ pub(super) fn validate_parent_ancestry(
     _path: &Path,
     parent: &ParentDirectory,
 ) -> Result<(), LogError> {
-    for directory in parent.all_handles() {
+    let ancestor_count = parent.ancestors.len();
+    for (index, directory) in parent.all_handles().enumerate() {
         ensure_directory_handle(directory)?;
-        validate_windows_parent_acl(directory)
+        let validation = if index < ancestor_count {
+            validate_windows_ancestor_acl(directory)
+        } else {
+            validate_windows_parent_acl(directory)
+        };
+        validation
             .map_err(|error| LogError::new(format!("log directory has an unsafe ACL: {error}")))?;
     }
     Ok(())
