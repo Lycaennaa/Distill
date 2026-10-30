@@ -67,13 +67,14 @@ pub(super) struct TestDirectory(PathBuf);
 impl TestDirectory {
     pub(super) fn new(label: &str) -> Self {
         let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::var_os("USERPROFILE")
+        let user_profile = std::env::var_os("USERPROFILE")
             .map(PathBuf::from)
-            .expect("local application data directory")
-            .join(format!(
-                "distill-log-windows-{label}-{}-{id}",
-                std::process::id()
-            ));
+            .expect("Windows user profile directory");
+        validate_test_directory_ancestry(&user_profile);
+        let path = user_profile.join(format!(
+            "distill-log-windows-{label}-{}-{id}",
+            std::process::id()
+        ));
         let mut security =
             crate::acl::PrivateWindowsSecurity::new().expect("build private test directory DACL");
         let attributes = security
@@ -116,6 +117,41 @@ fn open_directory_for_security(path: &Path) -> File {
     .expect("open test directory");
     // SAFETY: CreateFileW returned an owned directory handle.
     unsafe { File::from_raw_handle(handle.0 as _) }
+}
+
+fn open_directory_for_acl_inspection(path: &Path) -> std::io::Result<File> {
+    let wide = wide_path(path);
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(wide.as_ptr()),
+            (FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | READ_CONTROL).0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            None,
+        )
+    }
+    .map_err(|error| std::io::Error::other(error.to_string()))?;
+    // SAFETY: CreateFileW returned an owned directory handle.
+    Ok(unsafe { File::from_raw_handle(handle.0 as _) })
+}
+
+fn validate_test_directory_ancestry(path: &Path) {
+    for ancestor in path.ancestors() {
+        let directory = open_directory_for_acl_inspection(ancestor).unwrap_or_else(|error| {
+            panic!(
+                "cannot inspect test fixture ancestor `{}`: {error}",
+                ancestor.display()
+            )
+        });
+        crate::acl::validate_windows_parent_acl(&directory).unwrap_or_else(|error| {
+            panic!(
+                "test fixture ancestor `{}` has unsafe ACL: {error}",
+                ancestor.display()
+            )
+        });
+    }
 }
 
 #[test]
@@ -273,7 +309,8 @@ fn publish_links_from_the_sanitized_handle_after_path_replacement() {
         b"attacker-owned\n"
     );
     drop(sanitized);
-    assert!(workspace.cleanup().is_none());
+    fs::remove_file(&staged_path).expect("remove replacement path");
+    assert_eq!(workspace.cleanup(), None);
     assert_eq!(
         fs::read(&published).expect("read committed output"),
         b"sanitized payload\n"

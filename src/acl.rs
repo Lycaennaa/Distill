@@ -312,7 +312,9 @@ fn validate_windows_ace_access(
     if !principal_is_trusted && mask & untrusted_write_mask != 0 {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "log directory DACL grants write access to an untrusted principal",
+            format!(
+                "log directory DACL grants write access to an untrusted principal (mask {mask:#010x})"
+            ),
         ));
     }
     Ok(())
