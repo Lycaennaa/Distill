@@ -202,10 +202,7 @@ fn has_gradle_test_task(arguments: &[OsString]) -> bool {
 fn gradle_wrapper_command(discovery: &Discovery) -> CommandSpec {
     let java = std::env::var_os("JAVA_HOME")
         .filter(|home| !home.is_empty())
-        .map_or_else(
-            || OsString::from("java"),
-            |home| gradle_java_executable(home),
-        );
+        .map_or_else(|| OsString::from("java"), gradle_java_executable);
     let java_options = std::env::var_os("JAVA_OPTS")
         .map_or_else(String::new, |value| value.to_string_lossy().into_owned());
     let gradle_options = std::env::var_os("GRADLE_OPTS")

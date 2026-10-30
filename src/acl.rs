@@ -562,30 +562,36 @@ fn sid_bytes(sid: windows::Win32::Security::PSID) -> io::Result<Vec<u8>> {
 #[cfg(windows)]
 fn windows_sid_string(sid: windows::Win32::Security::PSID) -> io::Result<String> {
     let bytes = sid_bytes(sid)?;
-    if bytes.len() < 8 {
-        return Err(io::Error::new(
+    let invalid_length = || {
+        io::Error::new(
             io::ErrorKind::InvalidData,
             "Windows returned an invalid SID length",
-        ));
+        )
+    };
+    let header = bytes.get(..8).ok_or_else(invalid_length)?;
+    let mut header_bytes = header.iter().copied();
+    let revision = header_bytes.next().ok_or_else(invalid_length)?;
+    let sub_authority_count = usize::from(header_bytes.next().ok_or_else(invalid_length)?);
+    let expected_length = sub_authority_count
+        .checked_mul(4)
+        .and_then(|length| length.checked_add(8))
+        .ok_or_else(invalid_length)?;
+    if bytes.len() != expected_length {
+        return Err(invalid_length());
     }
-    let sub_authority_count = usize::from(bytes[1]);
-    if bytes.len() != 8 + sub_authority_count * 4 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Windows returned an invalid SID length",
-        ));
-    }
-    let identifier_authority = bytes[2..8]
+    let identifier_authority = bytes
+        .get(2..8)
+        .ok_or_else(invalid_length)?
         .iter()
         .fold(0_u64, |authority, byte| (authority << 8) | u64::from(*byte));
-    let mut display = format!("S-{}-{identifier_authority}", bytes[0]);
-    for sub_authority in bytes[8..].chunks_exact(4) {
-        let sub_authority = u32::from_le_bytes([
-            sub_authority[0],
-            sub_authority[1],
-            sub_authority[2],
-            sub_authority[3],
-        ]);
+    let mut display = format!("S-{revision}-{identifier_authority}");
+    let sub_authority_bytes = bytes.get(8..).ok_or_else(invalid_length)?;
+    let (sub_authorities, remainder) = sub_authority_bytes.as_chunks::<4>();
+    if !remainder.is_empty() {
+        return Err(invalid_length());
+    }
+    for sub_authority in sub_authorities {
+        let sub_authority = u32::from_le_bytes(*sub_authority);
         display.push('-');
         display.push_str(&sub_authority.to_string());
     }
