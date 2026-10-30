@@ -13,3 +13,4 @@ Notable user-visible changes are recorded here.
 - Add Cargo install support with validated local `--path` discovery.
 - Add a Windows x64 GNU release package; Xcode actions remain macOS-only.
 - Allow untrusted `FILE_ADD_SUBDIRECTORY` access on non-final Windows log-path ancestors while keeping the final destination parent and private log ACLs strict.
+- Preserve Windows timeout and cancellation results when forced child exits report platform-specific codes.

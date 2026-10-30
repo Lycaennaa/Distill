@@ -21,6 +21,12 @@ pub(super) enum CaptureCompleteness {
     Incomplete,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StopTiming {
+    BeforeChildStatus,
+    AfterChildStatus,
+}
+
 pub(super) struct SupervisedChild {
     pub(super) status: Option<ExitStatus>,
     pub(super) digest: Digest,
@@ -29,6 +35,7 @@ pub(super) struct SupervisedChild {
     pub(super) cleanup_failure: bool,
     pub(super) log_failure: bool,
     pub(super) stop_reason: Option<StopReason>,
+    pub(super) stop_timing: Option<StopTiming>,
 }
 
 pub(super) fn supervise_child(
@@ -108,6 +115,7 @@ pub(super) fn supervise_child(
         cleanup_failure: state.cleanup_failure,
         log_failure: state.capture.log_failure(),
         stop_reason: state.stop_reason,
+        stop_timing: state.stop_timing,
     })
 }
 
@@ -116,6 +124,7 @@ struct SupervisorState {
     cleanup_failure: bool,
     child_status: Option<ExitStatus>,
     stop_reason: Option<StopReason>,
+    stop_timing: Option<StopTiming>,
     termination_deadline: Option<Instant>,
     cleanup_deadline: Option<Instant>,
     force_sent: bool,
@@ -134,6 +143,7 @@ fn supervise_loop(
         cleanup_failure: false,
         child_status: None,
         stop_reason: None,
+        stop_timing: None,
         termination_deadline: None,
         cleanup_deadline: None,
         force_sent: false,
@@ -240,6 +250,15 @@ fn request_stop_if_needed(
         .is_some_and(|current| reason.priority() >= current.priority())
     {
         return;
+    }
+    if state.stop_reason.is_none() {
+        state.stop_timing = Some(
+            if state.child_status.is_none() && !matches!(reason, StopReason::NormalCleanup) {
+                StopTiming::BeforeChildStatus
+            } else {
+                StopTiming::AfterChildStatus
+            },
+        );
     }
 
     let (grace_deadline, cleanup_deadline, forced, signal_failed) =

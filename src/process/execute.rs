@@ -9,7 +9,7 @@ use super::launch::resolve_program;
 use super::model::{
     CancellationToken, CaptureSinks, CommandSpec, Execution, ProcessError, RawLogSink,
 };
-use super::supervisor::{CaptureCompleteness, is_expired, supervise_child};
+use super::supervisor::{CaptureCompleteness, StopTiming, is_expired, supervise_child};
 use super::termination::StopReason;
 use crate::digest::Digest;
 use crate::status::{Status, StatusClass, StatusReport};
@@ -201,10 +201,19 @@ fn execute_inner(
     };
     let supervised = supervise_child(child, deadline, cancellation, sinks)?;
     let mut statuses = Vec::new();
-    if let Some(status) = supervised.status {
+    let wrapper_stopped_child = supervised.stop_timing == Some(StopTiming::BeforeChildStatus)
+        && supervised
+            .stop_reason
+            .is_some_and(|reason| reason.status_class().is_some());
+    // A wrapper stop owns the reported status; child exit values from forced
+    // termination are platform-dependent and must not override it.
+    if !wrapper_stopped_child && let Some(status) = supervised.status {
         statuses.push(status_from_exit(status, spec.status_class())?);
     }
-    if supervised.wrapper_failure || supervised.cleanup_failure || statuses.is_empty() {
+    if supervised.wrapper_failure
+        || supervised.cleanup_failure
+        || (statuses.is_empty() && !wrapper_stopped_child)
+    {
         statuses.push(Status::wrapper(StatusClass::GenericWrapper)?);
     }
     if supervised.log_failure && supervised.stop_reason != Some(StopReason::LogFailure) {
