@@ -59,3 +59,5 @@ See [Usage](docs/usage.md) for command options, discovery, and action-specific b
 - [License](LICENSE)
 - [Security](SECURITY.md)
 - [Support](SUPPORT.md)
+
+If Distill has been useful, consider [giving it a star on GitHub](https://github.com/lycaennaa/distill)—it helps others find the project.
