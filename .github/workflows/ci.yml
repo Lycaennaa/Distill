@@ -2,7 +2,21 @@ name: CI
 
 on:
   push:
+    paths:
+      - '.github/workflows/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'clippy.toml'
+      - 'src/**'
+      - 'tests/**'
   pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'clippy.toml'
+      - 'src/**'
+      - 'tests/**'
   workflow_dispatch:
 
 permissions:
