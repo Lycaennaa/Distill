@@ -2,7 +2,7 @@
 
 Notable user-visible changes are recorded here.
 
-## Unreleased
+## v3.0.0
 
 - Bound Gradle JUnit aggregation by observed tasks, directory entries, and invocation-wide file/byte limits; incomplete summaries are omitted.
 - Use configured Gradle subproject directories for JUnit reports and reject unresolved mappings and paths outside the project root.
@@ -11,7 +11,7 @@ Notable user-visible changes are recorded here.
 - Document Cargo installation from Git, including tag pinning.
 - Add Cargo xtask support. The public `Action::Xtask` variant is source-breaking, requiring major version 2.1.0.
 - Add Cargo install support with validated local `--path` discovery.
-- Add a Windows x64 GNU release package; Xcode actions remain macOS-only.
+- Add a Windows x64 release package; Xcode actions remain macOS-only.
 - Allow untrusted `FILE_ADD_SUBDIRECTORY` access on non-final Windows log-path ancestors while keeping the final destination parent and private log ACLs strict.
 - Preserve Windows timeout and cancellation results when forced child exits report platform-specific codes.
-- Windows GNU release assets now provide `distill.exe` directly instead of a ZIP.
+- Windows release assets now provide `distill.exe` directly instead of a ZIP.
