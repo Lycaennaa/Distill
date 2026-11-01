@@ -1,13 +1,15 @@
 #![allow(
     unsafe_code,
-    reason = "isolated FFI for checking inherited macOS filesystem ACLs"
+    reason = "isolated FFI for inspecting macOS and Linux filesystem ACLs"
 )]
 
+#[cfg(target_os = "linux")]
+use std::ffi::CStr;
 #[cfg(target_os = "macos")]
 use std::ffi::c_void;
 use std::fs::File;
 use std::io;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 use std::os::fd::AsRawFd;
 
 #[cfg(target_os = "macos")]
@@ -17,6 +19,29 @@ const ACL_TYPE_EXTENDED: i32 = 0x0000_0100;
 unsafe extern "C" {
     fn acl_get_fd_np(fd: i32, acl_type: i32) -> *mut c_void;
     fn acl_free(object: *mut c_void) -> i32;
+}
+
+#[cfg(target_os = "linux")]
+const LINUX_ACCESS_ACL_XATTR: &CStr = c"system.posix_acl_access";
+#[cfg(target_os = "linux")]
+const LINUX_DEFAULT_ACL_XATTR: &CStr = c"system.posix_acl_default";
+
+// Linux stores extended POSIX ACLs in these xattrs. Query their size through the
+// open descriptor so inspection does not allocate or copy ACL contents.
+#[cfg(target_os = "linux")]
+fn linux_xattr_present(fd: std::os::fd::RawFd, name: &CStr) -> io::Result<bool> {
+    // SAFETY: `name` is a nul-terminated xattr name, `fd` is a borrowed descriptor,
+    // and a null value with size zero is the documented fgetxattr size-query form.
+    let result = unsafe { nix::libc::fgetxattr(fd, name.as_ptr(), std::ptr::null_mut(), 0) };
+    if result >= 0 {
+        return Ok(true);
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() == Some(nix::libc::ENODATA) {
+        Ok(false)
+    } else {
+        Err(error)
+    }
 }
 
 #[cfg(not(windows))]
@@ -43,12 +68,22 @@ pub fn has_extended_acl(file: &File) -> io::Result<bool> {
         }
         Ok(true)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
+    {
+        if linux_xattr_present(file.as_raw_fd(), LINUX_ACCESS_ACL_XATTR)? {
+            Ok(true)
+        } else if file.metadata()?.is_dir() {
+            linux_xattr_present(file.as_raw_fd(), LINUX_DEFAULT_ACL_XATTR)
+        } else {
+            Ok(false)
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
         let _ = file;
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "extended ACL inspection is supported only on macOS",
+            "extended ACL inspection is supported only on macOS and Linux",
         ))
     }
 }
@@ -662,4 +697,170 @@ fn set_test_untrusted_acl(file: &File, access_mask: u32) -> io::Result<()> {
         return Err(windows_status_error(status.0));
     }
     Ok(())
+}
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::{
+        LINUX_ACCESS_ACL_XATTR, LINUX_DEFAULT_ACL_XATTR, has_extended_acl, linux_xattr_present,
+    };
+    use std::ffi::CStr;
+    use std::fs::{self, File, OpenOptions};
+    use std::io;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path = loop {
+                let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+                let path = std::env::temp_dir()
+                    .join(format!("distill-acl-test-{}-{id}", std::process::id()));
+                match fs::create_dir(&path) {
+                    Ok(()) => break path,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create ACL test directory: {error}"),
+                }
+            };
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                .expect("make ACL test directory private");
+            let directory = File::open(&path).expect("open ACL test directory");
+            clear_acl_xattr(&directory, LINUX_ACCESS_ACL_XATTR)
+                .expect("clear inherited access ACL from test directory");
+            clear_acl_xattr(&directory, LINUX_DEFAULT_ACL_XATTR)
+                .expect("clear inherited default ACL from test directory");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                .expect("restore ACL test directory permissions");
+            Self(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+
+        fn private_file(&self, name: &str) -> File {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(self.path().join(name))
+                .expect("create private ACL test file")
+        }
+
+        fn private_subdirectory(&self, name: &str) -> File {
+            let path = self.path().join(name);
+            fs::create_dir(&path).expect("create private ACL test subdirectory");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                .expect("make ACL test subdirectory private");
+            File::open(path).expect("open ACL test subdirectory")
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn set_extended_acl(file: &File, name: &CStr) -> io::Result<()> {
+        // Linux POSIX ACL xattrs use version 2 followed by 8-byte little-endian entries.
+        let named_uid = if nix::unistd::geteuid().as_raw() == 0 {
+            1_u32
+        } else {
+            0_u32
+        };
+        let undefined_id = u32::MAX;
+        let entries = [
+            (0x01_u16, 0o6_u16, undefined_id), // ACL_USER_OBJ
+            (0x02_u16, 0o4_u16, named_uid),    // ACL_USER
+            (0x04_u16, 0o4_u16, undefined_id), // ACL_GROUP_OBJ
+            (0x10_u16, 0o4_u16, undefined_id), // ACL_MASK
+            (0x20_u16, 0o0_u16, undefined_id), // ACL_OTHER
+        ];
+        let mut acl = Vec::with_capacity(4 + entries.len() * 8);
+        acl.extend_from_slice(&2_u32.to_le_bytes());
+        for (tag, permissions, id) in entries {
+            acl.extend_from_slice(&tag.to_le_bytes());
+            acl.extend_from_slice(&permissions.to_le_bytes());
+            acl.extend_from_slice(&id.to_le_bytes());
+        }
+
+        // SAFETY: the descriptor is live and the xattr name and ACL buffer remain valid
+        // for the duration of fsetxattr.
+        let result = unsafe {
+            nix::libc::fsetxattr(
+                file.as_raw_fd(),
+                name.as_ptr(),
+                acl.as_ptr().cast(),
+                acl.len(),
+                0,
+            )
+        };
+        if result == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    fn clear_acl_xattr(file: &File, name: &CStr) -> io::Result<()> {
+        // SAFETY: `file` owns a live descriptor and `name` is a nul-terminated xattr name.
+        let result = unsafe { nix::libc::fremovexattr(file.as_raw_fd(), name.as_ptr()) };
+        if result == 0 {
+            return Ok(());
+        }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(nix::libc::ENODATA) {
+            Ok(())
+        } else {
+            Err(error)
+        }
+    }
+
+    #[test]
+    fn private_files_and_directories_without_acls_pass() {
+        let temp = TestDirectory::new();
+        let file = temp.private_file("private-file");
+        let directory = temp.private_subdirectory("private-directory");
+
+        assert!(!has_extended_acl(&file).expect("inspect private file ACLs"));
+        assert!(!has_extended_acl(&directory).expect("inspect private directory ACLs"));
+    }
+
+    #[test]
+    fn explicit_access_and_default_acls_are_detected() {
+        let temp = TestDirectory::new();
+        let file = temp.private_file("access-acl-file");
+        let access_directory = temp.private_subdirectory("access-acl-directory");
+        let default_directory = temp.private_subdirectory("default-acl-directory");
+
+        assert!(!has_extended_acl(&file).expect("inspect file before installing ACL"));
+        set_extended_acl(&file, LINUX_ACCESS_ACL_XATTR).expect("install file access ACL");
+        assert!(has_extended_acl(&file).expect("inspect file access ACL"));
+
+        assert!(!has_extended_acl(&access_directory).expect("inspect directory before ACL"));
+        set_extended_acl(&access_directory, LINUX_ACCESS_ACL_XATTR)
+            .expect("install directory access ACL");
+        assert!(has_extended_acl(&access_directory).expect("inspect directory access ACL"));
+
+        assert!(
+            !has_extended_acl(&default_directory).expect("inspect directory before default ACL")
+        );
+        set_extended_acl(&default_directory, LINUX_DEFAULT_ACL_XATTR)
+            .expect("install directory default ACL");
+        assert!(has_extended_acl(&default_directory).expect("inspect directory default ACL"));
+    }
+
+    #[test]
+    fn unexpected_xattr_inspection_errors_fail_closed() {
+        let error = linux_xattr_present(-1, LINUX_ACCESS_ACL_XATTR)
+            .expect_err("invalid descriptors must not be treated as ACL-free");
+        assert_eq!(error.raw_os_error(), Some(nix::libc::EBADF));
+    }
 }

@@ -2,11 +2,11 @@
 
 ## CI and publishing
 
-CI runs formatting, tests, Clippy, source packaging, and macOS smoke tests. It also runs Windows library/process tests, a Windows binary smoke test, and a Windows x64 cross-build. Xcode command behavior uses fake-tool tests because the repository has no Xcode project fixture.
+CI runs the full Rust checks and a built-CLI smoke path natively on Linux, as well as macOS tests/smoke and a Windows GNU cross-build. The release workflow publishes Apple Silicon and Intel macOS archives, an x86_64 Linux GNU archive, and the x64 Windows GNU executable.
 
-The release workflow publishes matching `vX.Y.Z` tag pushes after CI succeeds. It can also be run manually from the default branch by entering a new matching tag; the workflow creates that tag on the selected commit after confirming push CI passed. It verifies tag targets and default-branch ancestry, resumes interrupted drafts, and checks archive and checksum-file digests before publishing Apple Silicon and Intel macOS archives plus the Windows x64 executable and `SHA256SUMS`.
+The `vX.Y.Z` release workflow verifies the tag against the default branch, builds assets, and creates `SHA256SUMS` covering every binary archive/executable. Release notes record each asset hash and the checksum-file hash; public release assets receive GitHub build provenance.
 
-GitHub artifact attestations are generated only when the repository is public. Release notes combine the `Unreleased` section of [CHANGELOG.md](../CHANGELOG.md) with GitHub-generated notes and verification instructions. If using a `v*` tag ruleset, allow the GitHub Actions app to create tags while preventing updates and deletions.
+GitHub-generated release notes are combined with the `Unreleased` section from [CHANGELOG.md](../CHANGELOG.md). See [SUPPORT.md](../SUPPORT.md) for supported platforms and known limitations.
 
 ## After each release
 

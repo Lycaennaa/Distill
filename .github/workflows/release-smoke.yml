@@ -32,8 +32,14 @@ jobs:
           test -s "$dist_dir/SHA256SUMS"
           shopt -s nullglob
           archives=("$dist_dir"/distill-*.tar.gz)
-          test "${#archives[@]}" -eq 2
+          test "${#archives[@]}" -eq 3
           windows_binaries=("$dist_dir"/distill-*-x86_64-pc-windows-gnu.exe)
           test "${#windows_binaries[@]}" -eq 1
           (cd "$dist_dir" && shasum -a 256 --check SHA256SUMS)
           test -s "${windows_binaries[0]}"
+          linux_archives=("$dist_dir"/distill-*-x86_64-unknown-linux-gnu.tar.gz)
+          test "${#linux_archives[@]}" -eq 1
+          mkdir -p "$dist_dir/linux"
+          tar -xzf "${linux_archives[0]}" -C "$dist_dir/linux"
+          test -x "$dist_dir/linux/distill"
+          "$dist_dir/linux/distill" --version

@@ -2,6 +2,10 @@
 
 Notable user-visible changes are recorded here.
 
+## Unreleased
+
+- Add x86_64 Linux GNU support and native Linux CI.
+
 ## v3.0.0
 
 - Bound Gradle JUnit aggregation by observed tasks, directory entries, and invocation-wide file/byte limits; incomplete summaries are omitted.

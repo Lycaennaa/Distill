@@ -101,3 +101,32 @@ jobs:
           name: distill-windows-gnu
           path: target/x86_64-pc-windows-gnu/release/distill.exe
           if-no-files-found: error
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          components: clippy, rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run unit and process suites
+        run: cargo test --locked --all-targets
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Build release binary
+        run: cargo build --locked --release
+      - name: Validate packaged source
+        run: cargo package --locked --no-verify
+      - name: Install packaged CLI
+        run: cargo install --path . --locked --root target/ci-install --force
+      - name: Smoke Linux CLI
+        run: |
+          set -euo pipefail
+          distill="$GITHUB_WORKSPACE/target/ci-install/bin/distill"
+          "$distill" --version
+          "$distill" --cwd "$GITHUB_WORKSPACE" cargo build -- --locked
+          "$distill" --cwd "$GITHUB_WORKSPACE" cargo clippy -- --all-targets

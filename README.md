@@ -1,12 +1,12 @@
 # distill
 
-`distill` produces compact, deterministic digests while wrapping Xcode, Swift, SwiftLint, Cargo, and Gradle. It runs on macOS and Windows x64.
+`distill` produces compact, deterministic digests while wrapping Xcode, Swift, SwiftLint, Cargo, and Gradle. It runs on macOS, x86_64 Linux, and Windows x64.
 
 Running the tool removes everything that was generated leaving left useful things like "build success" or "build fail" or "10 tests run, 8 pass, 2 failed, 0 skipped". Anything that isn't a success will tell you the errors and other issues. If you need to know what happened, Distill has a save log argument.
 
 ## Install
 
-Download the matching release asset from [GitHub Releases](https://github.com/lycaennaa/distill/releases): Apple Silicon uses `aarch64-apple-darwin`, Intel uses `x86_64-apple-darwin`, and Windows x64 downloads use the `.exe` asset directly. macOS assets are `.tar.gz` archives; extract the binary and put it on your `PATH`. Downloads are unsigned; macOS binaries are not notarized and Gatekeeper may warn.
+Download [GitHub Releases](https://github.com/lycaennaa/distill/releases): `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and the x64 Windows `.exe`. macOS and Linux assets are `.tar.gz` archives; download the matching archive and put `distill` on your `PATH`. The macOS binaries are unsigned; see [Gatekeeper guidance](docs/releases.md).
 
 Install from the repository's default branch:
 

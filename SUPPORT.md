@@ -1,6 +1,6 @@
 # Support
 
-Distill supports macOS only. Use the repository's GitHub Issues for reproducible bugs and feature requests. Use Discussions for questions if enabled; otherwise open a concise issue without sensitive details.
+Distill supports macOS, x86_64 Linux, and Windows x64. macOS-specific Xcode commands require macOS; Linux supports the cross-platform CLI paths but has no Xcode support. Use the repository's GitHub Issues for reproducible bugs and feature requests. Use Discussions for questions if enabled; otherwise open a concise issue without sensitive details.
 
 For bug reports, include:
 

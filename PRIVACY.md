@@ -20,6 +20,8 @@ Existing paths, symlinks, and concurrent reservations fail rather than overwrite
 
 On macOS and Unix, each destination ancestor must be owned by the invoking user or root, have no extended ACL, and not be group/world-writable unless sticky. On Windows, saved logs require local-disk paths and trusted ancestor owners. The final destination parent must not grant untrusted write access; an intermediate ancestor may grant the `FILE_ADD_SUBDIRECTORY` right alone, which cannot replace existing path components. Reparse-point parents and destinations are rejected. Temporary workspaces and log files use protected DACLs granting access only to the invoking user, Administrators, and SYSTEM. After publication, timeout or interrupt retains and reports the log. Saved logs and lock files remain on the user's filesystem until removed.
 
+On Linux, Distill inspects POSIX ACL access entries on saved-log files and access/default ACLs on directories, including default ACL entries relevant to inherited permissions. The kernel and filesystem must expose POSIX ACL xattrs; missing ACL data means no ACL, but any other ACL inspection error (including unsupported xattrs) fails closed and prevents saving the log.
+
 On Windows, saved-log paths must resolve to a local volume; UNC paths and mapped network drives are rejected.
 
 `--stream` is limited to launched Xcode build products; streamed Xcode output is subject to Xcode redaction. Distill does not provide a raw-output escape hatch.
