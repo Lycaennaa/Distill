@@ -13,15 +13,19 @@ fn powershell(script: &str) -> CommandSpec {
 fn child_test_command(mode: &str) -> CommandSpec {
     let executable = std::env::current_exe().expect("locate test executable");
     CommandSpec::new(executable.into_os_string())
-        .args([
-            "--ignored",
-            "--exact",
-            "process_child_fixture",
-            "--nocapture",
-        ])
+        .args(child_test_arguments())
         .env("DISTILL_PROCESS_TEST_MODE", mode)
         .label("windows-process-test")
         .with_status_class(StatusClass::Compile)
+}
+
+fn child_test_arguments() -> [&'static str; 4] {
+    [
+        "--ignored",
+        "--exact",
+        "process_child_fixture",
+        "--nocapture",
+    ]
 }
 
 #[test]
@@ -78,11 +82,9 @@ fn descendant_inheriting_output_pipes_does_not_delay_completion() {
     let deadline = started
         .checked_add(Duration::from_secs(12))
         .expect("compute process deadline");
-    let descendant_ready = std::cell::Cell::new(false);
+    let mut descendant_lines = Vec::new();
     let mut capture_descendant_output = |line: &distill::digest::OutputLine| {
-        if line.text().trim() == "descendant-ready" {
-            descendant_ready.set(true);
-        }
+        descendant_lines.push(line.text().to_owned());
         Ok(())
     };
     let execution = execute_until_with_lines(
@@ -95,8 +97,10 @@ fn descendant_inheriting_output_pipes_does_not_delay_completion() {
     let elapsed = started.elapsed();
 
     assert!(
-        descendant_ready.get(),
-        "descendant did not emit output through the inherited pipe"
+        descendant_lines
+            .iter()
+            .any(|line| line.trim() == "descendant-ready"),
+        "descendant did not emit output through the inherited pipe; captured: {descendant_lines:?}"
     );
     assert!(
         execution.report().final_status().is_success(),
@@ -122,19 +126,25 @@ fn process_child_fixture() {
             std::thread::sleep(Duration::from_secs(30));
         }
         Ok("descendant") => {
-            let _child = std::process::Command::new("powershell.exe")
-                .args([
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-Command",
-                    "Write-Output descendant-ready; Start-Sleep -Seconds 10",
-                ])
-                .stdin(std::process::Stdio::inherit())
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit())
-                .spawn()
-                .expect("spawn descendant PowerShell process");
+            let _child = std::process::Command::new(
+                std::env::current_exe().expect("locate test executable"),
+            )
+            .args(child_test_arguments())
+            .env("DISTILL_PROCESS_TEST_MODE", "descendant-leaf")
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .expect("spawn descendant test process");
             std::thread::sleep(Duration::from_secs(2));
+        }
+        Ok("descendant-leaf") => {
+            use std::io::Write as _;
+
+            let mut stdout = std::io::stdout().lock();
+            writeln!(stdout, "descendant-ready").expect("write descendant readiness marker");
+            stdout.flush().expect("flush descendant readiness marker");
+            std::thread::sleep(Duration::from_secs(10));
         }
         _ => {}
     }
