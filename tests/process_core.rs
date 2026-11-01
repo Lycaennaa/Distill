@@ -212,8 +212,7 @@ fn structured_diagnostics_have_a_separate_line_bound() {
     let json = format!(
         r#"{{"reason":"compiler-message","message":{{"message":"{message}","level":"error","spans":[]}}}}"#
     );
-    let leading_whitespace = " ".repeat(70_000);
-    let script = format!("printf '%s\\n' '{leading_whitespace}{json}'");
+    let script = format!("printf '%70000s%s\\n' '' '{json}'");
     let execution = execute(&shell(&script), None, &CancellationToken::new())
         .expect("execution should complete");
 
