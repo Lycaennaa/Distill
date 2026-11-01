@@ -245,7 +245,7 @@ fn xcode_list_emits_each_compact_section() -> TestResult {
     let fake_xcodebuild = bin.join("xcodebuild");
     fs::write(
         &fake_xcodebuild,
-        "#!/bin/sh\nprintf 'Information about project \\\"Demo\\\":\\n'\nprintf '    Targets:\\n'\nprintf '        Demo\\n'\nprintf '    Build Configurations:\\n'\nprintf '        Debug\\n'\nprintf '    Schemes:\\n'\nprintf '        Demo\\n'\n",
+        "#!/bin/sh\nprintf '%s\\n' 'Information about project \"Demo\":'\nprintf '    Targets:\\n'\nprintf '        Demo\\n'\nprintf '    Build Configurations:\\n'\nprintf '        Debug\\n'\nprintf '    Schemes:\\n'\nprintf '        Demo\\n'\n",
     )?;
     let mut permissions = fs::metadata(&fake_xcodebuild)?.permissions();
     permissions.set_mode(0o700);
