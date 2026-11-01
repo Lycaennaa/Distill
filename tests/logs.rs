@@ -313,7 +313,15 @@ fn save_log_normalizes_permissions_under_restrictive_umask() -> TestResult {
         &bin,
     )?;
 
-    assert!(output.status.success());
+    if !output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "distill exited with {}: stdout: {}; stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ))
+        .into());
+    }
     assert_eq!(fs::read_to_string(&log)?, "password=[REDACTED]\n");
     assert_eq!(fs::metadata(&log)?.permissions().mode() & 0o777, 0o600);
     let lock = root.join(".umask.log.distill.lock");
