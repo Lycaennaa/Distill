@@ -716,49 +716,44 @@ mod linux_tests {
     struct TestDirectory(PathBuf);
 
     impl TestDirectory {
-        fn new() -> Self {
+        fn new() -> io::Result<Self> {
             let path = loop {
                 let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
                 let path = std::env::temp_dir()
                     .join(format!("distill-acl-test-{}-{id}", std::process::id()));
                 match fs::create_dir(&path) {
                     Ok(()) => break path,
-                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                    Err(error) => panic!("create ACL test directory: {error}"),
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error),
                 }
             };
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-                .expect("make ACL test directory private");
-            let directory = File::open(&path).expect("open ACL test directory");
-            clear_acl_xattr(&directory, LINUX_ACCESS_ACL_XATTR)
-                .expect("clear inherited access ACL from test directory");
-            clear_acl_xattr(&directory, LINUX_DEFAULT_ACL_XATTR)
-                .expect("clear inherited default ACL from test directory");
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-                .expect("restore ACL test directory permissions");
-            Self(path)
+            let directory = Self(path);
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+            let handle = File::open(directory.path())?;
+            clear_acl_xattr(&handle, LINUX_ACCESS_ACL_XATTR)?;
+            clear_acl_xattr(&handle, LINUX_DEFAULT_ACL_XATTR)?;
+            fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))?;
+            Ok(directory)
         }
 
         fn path(&self) -> &std::path::Path {
             &self.0
         }
 
-        fn private_file(&self, name: &str) -> File {
+        fn private_file(&self, name: &str) -> io::Result<File> {
             OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create_new(true)
                 .mode(0o600)
                 .open(self.path().join(name))
-                .expect("create private ACL test file")
         }
 
-        fn private_subdirectory(&self, name: &str) -> File {
+        fn private_subdirectory(&self, name: &str) -> io::Result<File> {
             let path = self.path().join(name);
-            fs::create_dir(&path).expect("create private ACL test subdirectory");
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-                .expect("make ACL test subdirectory private");
-            File::open(path).expect("open ACL test subdirectory")
+            fs::create_dir(&path)?;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+            File::open(path)
         }
     }
 
@@ -770,11 +765,7 @@ mod linux_tests {
 
     fn set_extended_acl(file: &File, name: &CStr) -> io::Result<()> {
         // Linux POSIX ACL xattrs use version 2 followed by 8-byte little-endian entries.
-        let named_uid = if nix::unistd::geteuid().as_raw() == 0 {
-            1_u32
-        } else {
-            0_u32
-        };
+        let named_uid = u32::from(nix::unistd::geteuid().as_raw() == 0);
         let undefined_id = u32::MAX;
         let entries = [
             (0x01_u16, 0o6_u16, undefined_id), // ACL_USER_OBJ
@@ -783,7 +774,7 @@ mod linux_tests {
             (0x10_u16, 0o4_u16, undefined_id), // ACL_MASK
             (0x20_u16, 0o0_u16, undefined_id), // ACL_OTHER
         ];
-        let mut acl = Vec::with_capacity(4 + entries.len() * 8);
+        let mut acl = Vec::new();
         acl.extend_from_slice(&2_u32.to_le_bytes());
         for (tag, permissions, id) in entries {
             acl.extend_from_slice(&tag.to_le_bytes());
@@ -823,44 +814,78 @@ mod linux_tests {
         }
     }
 
-    #[test]
-    fn private_files_and_directories_without_acls_pass() {
-        let temp = TestDirectory::new();
-        let file = temp.private_file("private-file");
-        let directory = temp.private_subdirectory("private-directory");
-
-        assert!(!has_extended_acl(&file).expect("inspect private file ACLs"));
-        assert!(!has_extended_acl(&directory).expect("inspect private directory ACLs"));
+    fn require(condition: bool, message: &'static str) -> io::Result<()> {
+        if condition {
+            Ok(())
+        } else {
+            Err(io::Error::other(message))
+        }
     }
 
     #[test]
-    fn explicit_access_and_default_acls_are_detected() {
-        let temp = TestDirectory::new();
-        let file = temp.private_file("access-acl-file");
-        let access_directory = temp.private_subdirectory("access-acl-directory");
-        let default_directory = temp.private_subdirectory("default-acl-directory");
+    fn private_files_and_directories_without_acls_pass() -> io::Result<()> {
+        let temp = TestDirectory::new()?;
+        let file = temp.private_file("private-file")?;
+        let directory = temp.private_subdirectory("private-directory")?;
 
-        assert!(!has_extended_acl(&file).expect("inspect file before installing ACL"));
-        set_extended_acl(&file, LINUX_ACCESS_ACL_XATTR).expect("install file access ACL");
-        assert!(has_extended_acl(&file).expect("inspect file access ACL"));
-
-        assert!(!has_extended_acl(&access_directory).expect("inspect directory before ACL"));
-        set_extended_acl(&access_directory, LINUX_ACCESS_ACL_XATTR)
-            .expect("install directory access ACL");
-        assert!(has_extended_acl(&access_directory).expect("inspect directory access ACL"));
-
-        assert!(
-            !has_extended_acl(&default_directory).expect("inspect directory before default ACL")
-        );
-        set_extended_acl(&default_directory, LINUX_DEFAULT_ACL_XATTR)
-            .expect("install directory default ACL");
-        assert!(has_extended_acl(&default_directory).expect("inspect directory default ACL"));
+        require(
+            !has_extended_acl(&file)?,
+            "private file unexpectedly has an extended ACL",
+        )?;
+        require(
+            !has_extended_acl(&directory)?,
+            "private directory unexpectedly has an extended ACL",
+        )?;
+        Ok(())
     }
 
     #[test]
-    fn unexpected_xattr_inspection_errors_fail_closed() {
-        let error = linux_xattr_present(-1, LINUX_ACCESS_ACL_XATTR)
-            .expect_err("invalid descriptors must not be treated as ACL-free");
-        assert_eq!(error.raw_os_error(), Some(nix::libc::EBADF));
+    fn explicit_access_and_default_acls_are_detected() -> io::Result<()> {
+        let temp = TestDirectory::new()?;
+        let file = temp.private_file("access-acl-file")?;
+        let access_directory = temp.private_subdirectory("access-acl-directory")?;
+        let default_directory = temp.private_subdirectory("default-acl-directory")?;
+
+        require(
+            !has_extended_acl(&file)?,
+            "file unexpectedly has an access ACL before installation",
+        )?;
+        set_extended_acl(&file, LINUX_ACCESS_ACL_XATTR)?;
+        require(has_extended_acl(&file)?, "file access ACL was not detected")?;
+
+        require(
+            !has_extended_acl(&access_directory)?,
+            "directory unexpectedly has an access ACL before installation",
+        )?;
+        set_extended_acl(&access_directory, LINUX_ACCESS_ACL_XATTR)?;
+        require(
+            has_extended_acl(&access_directory)?,
+            "directory access ACL was not detected",
+        )?;
+
+        require(
+            !has_extended_acl(&default_directory)?,
+            "directory unexpectedly has a default ACL before installation",
+        )?;
+        set_extended_acl(&default_directory, LINUX_DEFAULT_ACL_XATTR)?;
+        require(
+            has_extended_acl(&default_directory)?,
+            "directory default ACL was not detected",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn unexpected_xattr_inspection_errors_fail_closed() -> io::Result<()> {
+        let Err(error) = linux_xattr_present(-1, LINUX_ACCESS_ACL_XATTR) else {
+            return Err(io::Error::other(
+                "invalid descriptors must not be treated as ACL-free",
+            ));
+        };
+        require(
+            error.raw_os_error() == Some(nix::libc::EBADF),
+            "invalid descriptor did not return EBADF",
+        )?;
+        Ok(())
     }
 }
